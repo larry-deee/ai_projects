@@ -1,0 +1,11 @@
+{
+  "consumer_key": "your_salesforce_consumer_key_here",
+  "username": "your_username@company.com",
+  "private_key_file": "/path/to/your/server.key",
+  "instance_url": "https://your-instance.my.salesforce.com",
+  "api_version": "v64.0",
+  "token_file": "salesforce_models_token.json",
+  "default_model": "claude-3-haiku",
+  "default_max_tokens": 1000,
+  "default_temperature": 0.7
+}
