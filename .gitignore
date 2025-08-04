@@ -1,0 +1,40 @@
+# Python specifics
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Token and credential files
+*.json
+!config.json.example
+salesforce_models_token.json*
+*.token
+*.credentials
+
+# Environment and virtual environments
+.env
+.venv
+venv/
+ENV/
+
+# Logs
+*.log
+
+# Development artifacts
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Operating System
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*~
+
+# Performance files
+*.prof
+*.trace

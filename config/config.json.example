@@ -1,0 +1,28 @@
+{
+    "consumer_key": "YOUR_CONSUMER_KEY_HERE",
+    "consumer_secret": "YOUR_CONSUMER_SECRET_HERE",
+    "username": "your.username@example.com",
+    "instance_url": "https://your-instance.my.salesforce.com",
+    "api_version": "v64.0",
+    "token_file": "salesforce_models_token.json",
+    "default_model": "claude-4-sonnet",
+    "default_max_tokens": 1000,
+    "default_temperature": 0.7,
+    "oauth_timeout": 60,
+    "token_buffer_seconds": 600,
+    "max_oauth_retries": 3,
+    "connection_pool_size": 10,
+    "keep_alive_timeout": 30,
+    "tool_calling": {
+        "security_profile": "development",
+        "allow_dangerous_functions": false,
+        "enable_write_operations": false,
+        "write_operation_whitelist": [],
+        "strict_parameter_validation": true,
+        "max_concurrent_calls": 3,
+        "timeout": 30.0,
+        "allowed_dangerous_functions": [],
+        "blocked_functions": []
+    }
+}
+EOF < /dev/null
