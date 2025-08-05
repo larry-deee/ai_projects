@@ -1,0 +1,26 @@
+# Salesforce Models API Integration Requirements
+# ===============================================
+
+# Core dependencies (reuse from main project)
+pandas>=1.5.0
+requests>=2.28.0
+PyJWT>=2.6.0
+
+# Additional dependencies for Models API integration
+flask>=2.3.0
+flask-cors>=4.0.0
+
+# For tool calling schema validation
+pydantic>=2.0.0
+
+# Optional: For enhanced JSON handling
+ujson>=5.7.0
+
+# Optional: For better logging and monitoring
+python-dotenv>=1.0.0
+
+# For async server
+aiohttp>=3.9.1
+gunicorn>=21.2.0
+uvicorn>=0.23.2
+asgiref>=3.7.2
