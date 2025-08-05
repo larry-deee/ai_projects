@@ -25,6 +25,11 @@
 - [ ] **Thread pool executor**: AsyncIO operations use thread pool when needed
 - [ ] **Concurrent access**: No event loop conflicts under high concurrency
 
+### 5. SSL Certificate Configuration ✅
+- [ ] **SSL context**: aiohttp.ClientSession uses proper SSL context with certifi certificates
+- [ ] **Certificate verification**: SSL certificate verification enabled for Salesforce connections
+- [ ] **macOS compatibility**: SSL context configured for macOS certificate store compatibility
+
 ## Health Check Commands
 
 ### Basic Health Check
@@ -94,6 +99,11 @@ ps -eLf | grep python | wc -l  # Should be reasonable number of threads
 2. **Thread pool saturation**: Monitor ThreadPoolExecutor usage
 3. **Deadlock detection**: Check for hanging requests
 
+### Symptom: SSL Certificate Errors
+1. **Check error message**: Look for "SSLCertVerificationError" in logs
+2. **Verify certificates**: Run `python -c "import certifi; print(certifi.where())"`
+3. **Test SSL connection**: `openssl s_client -connect storm-d7bcc04bae645e.my.salesforce.com:443`
+
 ## Resolved Issues Documentation
 
 ### ✅ Fixed: Token Buffer Inconsistency
@@ -115,6 +125,29 @@ ps -eLf | grep python | wc -l  # Should be reasonable number of threads
 - **Issue**: Thread contention in cache operations
 - **Fix**: Optimized cache windows and reduced lock duration
 - **Files Modified**: `llm_endpoint_server.py` lines 867, 894
+
+### ✅ Fixed: SSL Certificate Verification Error (Aug 5, 2025)
+- **Issue**: `SSLCertVerificationError: certificate verify failed: unable to get local issuer certificate` on macOS
+- **Root Cause**: aiohttp.ClientSession instances in salesforce_models_client.py lacked proper SSL context configuration
+- **Fix**: Added SSL context using certifi certificates to all aiohttp.ClientSession calls
+- **Files Modified**: `salesforce_models_client.py` (3 locations: lines 295, 465, 553)
+- **Prevention**: SSL context configuration now included in pre-deployment verification checklist
+
+### ✅ Fixed: Rate Limiting and Conversation State Issues (Aug 5, 2025)
+- **Issue**: Frequent 429 rate limit errors and excessive emergency conversation cleanups
+- **Root Cause**: 
+  1. Emergency cleanup triggered on every message addition instead of only when limit exceeded
+  2. No exponential backoff retry logic for rate limit errors
+  3. Conversation limits too high causing memory pressure
+- **Fix**: 
+  1. Fixed conversation state logic to only trigger emergency cleanup when actually exceeding limits
+  2. Added exponential backoff with jitter for 429 errors (3 retries, 1-8s delays)
+  3. Reduced conversation limits: max_messages 50→30, cleanup_threshold 45→25, context retention 20→15
+- **Files Modified**: 
+  - `tool_handler.py` (lines 60-61, 78-80, 95, 124)
+  - `salesforce_models_client.py` (lines 561-600, import section)
+- **Backward Compatibility**: All OpenAI/Anthropic API specs maintained, n8n and claude-code clients unaffected
+- **Rollback**: Revert conversation limits and remove retry logic - see section below
 
 ## Prevention Measures
 
@@ -156,5 +189,48 @@ ps -eLf | grep python | wc -l  # Should be reasonable number of threads
 - Thread safety concerns
 - Memory leaks or high resource usage
 
-**Last Updated**: 2025-08-04
-**Next Review**: 2025-08-11
+## Rollback Procedures
+
+### Rate Limiting and Conversation State Fix Rollback
+**If the Aug 5, 2025 fixes cause issues, follow these steps:**
+
+#### 1. Revert Conversation Limits (tool_handler.py)
+```python
+# Change lines 60-61 back to:
+self.max_messages = 50 # Restore from 30
+self.message_cleanup_threshold = 45 # Restore from 25
+
+# Change line 95 back to:
+recent_messages = self.messages[-20:] # Restore from 15
+
+# Change line 124 back to:  
+recent_messages = self.messages[-10:] # Restore from 8
+```
+
+#### 2. Revert Emergency Cleanup Logic (tool_handler.py)
+```python
+# Change lines 78-80 back to:
+if len(self.messages) > self.max_messages:
+    logger.warning(f"⚠️ Message limit exceeded: {len(self.messages)} > {self.max_messages}")
+self._emergency_cleanup()  # Always trigger cleanup (original behavior)
+```
+
+#### 3. Remove Rate Limiting Retry Logic (salesforce_models_client.py)
+```python
+# Remove import: random
+# Replace lines 561-600 with original single-attempt logic:
+async with aiohttp.ClientSession(timeout=timeout_obj, connector=aiohttp.TCPConnector(ssl=SSL_CONTEXT)) as session:
+    async with session.post(endpoint, headers=headers, json=payload) as response:
+        if response.status in [200, 201]:
+            return await response.json()
+        else:
+            raise Exception(f"Chat completion failed: {response.status} - {await response.text()}")
+```
+
+#### 4. Restart Service
+```bash
+./start_llm_service.sh restart
+```
+
+**Last Updated**: 2025-08-05
+**Next Review**: 2025-08-12

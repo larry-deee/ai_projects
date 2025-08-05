@@ -20,7 +20,16 @@ import json
 import asyncio
 import requests
 import aiohttp
+import ssl
+import random
 from typing import List, Dict, Optional, Any
+
+try:
+    import certifi
+    SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+except ImportError:
+    # Fallback: create default context without certifi
+    SSL_CONTEXT = ssl.create_default_context()
 
 
 class SalesforceModelsClient:
@@ -292,7 +301,7 @@ class AsyncSalesforceModelsClient:
         
         for attempt in range(max_retries):
             try:
-                async with aiohttp.ClientSession() as session:
+                async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=SSL_CONTEXT)) as session:
                     async with session.post(
                         oauth_url,
                         data={
@@ -462,7 +471,7 @@ class AsyncSalesforceModelsClient:
         timeout_obj = aiohttp.ClientTimeout(total=timeout)
         session = None
         try:
-            session = aiohttp.ClientSession(timeout=timeout_obj)
+            session = aiohttp.ClientSession(timeout=timeout_obj, connector=aiohttp.TCPConnector(ssl=SSL_CONTEXT))
             async with session.post(endpoint, headers=headers, json=payload) as response:
                 if response.status in [200, 201]:
                     return await response.json()
@@ -550,12 +559,41 @@ class AsyncSalesforceModelsClient:
         print(f"🕐 Using async chat timeout: {timeout}s for content length {total_content_length}, model: {model}")
         
         timeout_obj = aiohttp.ClientTimeout(total=timeout)
-        async with aiohttp.ClientSession(timeout=timeout_obj) as session:
-            async with session.post(endpoint, headers=headers, json=payload) as response:
-                if response.status in [200, 201]:
-                    return await response.json()
+        
+        # Rate limiting retry logic with exponential backoff
+        max_retries = 3
+        base_delay = 1.0
+        
+        for attempt in range(max_retries + 1):
+            try:
+                async with aiohttp.ClientSession(timeout=timeout_obj, connector=aiohttp.TCPConnector(ssl=SSL_CONTEXT)) as session:
+                    async with session.post(endpoint, headers=headers, json=payload) as response:
+                        if response.status in [200, 201]:
+                            return await response.json()
+                        elif response.status == 429:  # Rate limit exceeded
+                            if attempt < max_retries:
+                                # Exponential backoff with jitter
+                                delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                                print(f"⏸️ Rate limit hit, retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries + 1})")
+                                await asyncio.sleep(delay)
+                                continue
+                            else:
+                                error_text = await response.text()
+                                raise Exception(f"Rate limit exceeded after {max_retries} retries: {response.status} - {error_text}")
+                        else:
+                            error_text = await response.text()
+                            raise Exception(f"Chat completion failed: {response.status} - {error_text}")
+            except asyncio.TimeoutError:
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** attempt)
+                    print(f"⏸️ Timeout, retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries + 1})")
+                    await asyncio.sleep(delay)
+                    continue
                 else:
-                    raise Exception(f"Chat completion failed: {response.status} - {await response.text()}")
+                    raise Exception(f"Request timed out after {max_retries} retries")
+        
+        # Should not reach here, but fallback
+        raise Exception("Unexpected error in retry logic")
 
 
 def main():

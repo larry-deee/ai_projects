@@ -56,9 +56,9 @@ class ConversationState:
         self.tool_responses: Dict[str, str] = {}
         self.last_assistant_tool_calls: Optional[List[ToolCall]] = None
         
-        # OPTIMIZED: Memory bounds and performance tracking
-        self.max_messages = 50 # Limit conversation history to 50 messages
-        self.message_cleanup_threshold = 45 # Start cleanup when approaching limit
+        # OPTIMIZED: Memory bounds and performance tracking  
+        self.max_messages = 30 # Limit conversation history to 30 messages (reduced from 50)
+        self.message_cleanup_threshold = 25 # Start cleanup when approaching limit (reduced from 45)
         self.total_messages_processed = 0
         self.cleanup_count = 0
     
@@ -74,10 +74,10 @@ class ConversationState:
         if len(self.messages) >= self.message_cleanup_threshold:
             self._cleanup_old_messages()
         
-        # Log cleanup events for monitoring
+        # Emergency cleanup only when TRULY exceeding limits
         if len(self.messages) > self.max_messages:
             logger.warning(f"⚠️ Message limit exceeded: {len(self.messages)} > {self.max_messages}")
-        self._emergency_cleanup()
+            self._emergency_cleanup()
     
     def _cleanup_old_messages(self):
         """
@@ -92,7 +92,7 @@ class ConversationState:
         # Keep system messages and recent user/assistant interactions
         retained_messages = []
         system_messages = [msg for msg in self.messages if msg.role == 'system']
-        recent_messages = self.messages[-20:] # Keep last 20 messages for context
+        recent_messages = self.messages[-15:] # Keep last 15 messages for context (reduced from 20)
         
         # Combine system messages with recent messages
         retained_messages = system_messages + recent_messages
@@ -119,9 +119,9 @@ class ConversationState:
         """
         original_count = len(self.messages)
         
-        # Keep only essential messages: system + last 10 messages
+        # Keep only essential messages: system + last 8 messages
         system_messages = [msg for msg in self.messages if msg.role == 'system']
-        recent_messages = self.messages[-10:] # Keep only last 10 messages
+        recent_messages = self.messages[-8:] # Keep only last 8 messages (reduced from 10)
         
         self.messages = system_messages + recent_messages
         
