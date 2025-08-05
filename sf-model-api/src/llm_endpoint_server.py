@@ -1475,36 +1475,13 @@ def chat_completions():
             # Traditional non-tool calling request - preserve existing logic
             logger.info(f"Processing traditional request - Model: {sf_model}")
             
-            # Convert messages to Salesforce format
-            system_message = None
-            user_messages = []
+            # Validate messages array
+            if len(messages) == 0:
+                return jsonify({"error": "No messages found"}), 400
             
-            for msg in messages:
-                if msg.get('role') == 'system':
-                    system_message = msg.get('content', '')
-                elif msg.get('role') == 'user':
-                    user_messages.append(msg.get('content', ''))
-                elif msg.get('role') == 'assistant':
-                    # For conversation context, we'll include assistant messages in the prompt
-                    user_messages.append(f"Assistant: {msg.get('content', '')}")
-                elif msg.get('role') == 'tool':
-                    # Handle tool messages in traditional mode
-                    user_messages.append(f"Tool Result: {msg.get('content', '')}")
-            
-            # Combine all user messages
-            if len(user_messages) == 0:
-                return jsonify({"error": "No user messages found"}), 400
-            
-            # For multi-turn conversations, use the last user message as the prompt
-            # and include conversation history in system message if needed
-            final_prompt = user_messages[-1]
-            
-            # If there's conversation history, include it
-            if len(user_messages) > 1 and not system_message:
-                conversation_history = "\n".join(user_messages[:-1])
-                system_message = f"Previous conversation:\n{conversation_history}\n\n Please respond to the following:"
-            
-            logger.info(f"Processing request - Model: {sf_model}, Prompt length: {len(final_prompt)}")
+            # Calculate content length for timeout estimation
+            total_content_length = sum(len(msg.get('content', '')) for msg in messages)
+            logger.info(f"Processing request - Model: {sf_model}, Messages: {len(messages)}, Content length: {total_content_length}")
             
             # Set up timeout handling to prevent gunicorn worker timeouts
             def timeout_handler(signum, frame):
@@ -1512,8 +1489,8 @@ def chat_completions():
             
             # Calculate appropriate timeout based on request characteristics
             timeout = 300 # 5 minutes base timeout
-            if len(final_prompt) > 20000:
-                timeout = 480 # 8 minutes for large prompts
+            if total_content_length > 20000:
+                timeout = 480 # 8 minutes for large content
             elif "claude-4" in sf_model:
                 timeout = 420 # 7 minutes for claude-4
             
@@ -1524,13 +1501,12 @@ def chat_completions():
                 signal.alarm(timeout)
             
             try:
-                # Generate response using Salesforce Models API
-                sf_response = client.generate_text(
-                    prompt=final_prompt,
+                # Generate response using Salesforce Models API with chat-generations endpoint
+                sf_response = client.chat_completion(
+                    messages=messages,
                     model=sf_model,
                     max_tokens=max_tokens,
-                    temperature=temperature,
-                    system_message=system_message
+                    temperature=temperature
                 )
             finally:
                 # Clean up signal handler
