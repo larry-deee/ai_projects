@@ -349,22 +349,28 @@ class ToolCallingHandler:
             response_messages = self.conversation_state.get_messages_for_api()
             
             # Generate next response
-            from llm_endpoint_server import get_thread_client, format_openai_response
+            from llm_endpoint_server import get_thread_client, format_openai_response, with_token_refresh_sync
             
-            client = get_thread_client()
-            if not client:
-                raise Exception("Service not initialized")
+            # Create a token-protected wrapper for the API call
+            @with_token_refresh_sync
+            def _make_api_call():
+                client = get_thread_client()
+                if not client:
+                    raise Exception("Service not initialized")
+                
+                # Convert messages to Salesforce format
+                system_message, final_prompt = self._convert_to_salesforce_format(response_messages)
+                
+                # Generate response
+                return client.generate_text(
+                    prompt=final_prompt,
+                    model=model,
+                    system_message=system_message,
+                    **kwargs
+                )
             
-            # Convert messages to Salesforce format
-            system_message, final_prompt = self._convert_to_salesforce_format(response_messages)
-            
-            # Generate response
-            sf_response = client.generate_text(
-                prompt=final_prompt,
-                model=model,
-                system_message=system_message,
-                **kwargs
-            )
+            # Make the protected API call
+            sf_response = _make_api_call()
             
             # Convert to OpenAI format
             openai_response = format_openai_response(sf_response, model)
@@ -443,26 +449,32 @@ class ToolCallingHandler:
             enhanced_prompt = self._build_tool_calling_prompt(messages, tools, tool_choice)
             
             # Get client and generate response
-            from llm_endpoint_server import get_thread_client, format_openai_response
+            from llm_endpoint_server import get_thread_client, format_openai_response, with_token_refresh_sync
             
-            client = get_thread_client()
-            if not client:
-                raise Exception("Service not initialized")
+            # Create a token-protected wrapper for the API call
+            @with_token_refresh_sync
+            def _make_api_call():
+                client = get_thread_client()
+                if not client:
+                    raise Exception("Service not initialized")
+                
+                # Extract system message from messages
+                system_message = None
+                for msg in messages:
+                    if msg.get('role') == 'system':
+                        system_message = msg.get('content', '')
+                        break
+                
+                # Generate response
+                return client.generate_text(
+                    prompt=enhanced_prompt,
+                    model=model,
+                    system_message=system_message,
+                    **kwargs
+                )
             
-            # Extract system message from messages
-            system_message = None
-            for msg in messages:
-                if msg.get('role') == 'system':
-                    system_message = msg.get('content', '')
-                    break
-            
-            # Generate response
-            sf_response = client.generate_text(
-                prompt=enhanced_prompt,
-                model=model,
-                system_message=system_message,
-                **kwargs
-            )
+            # Make the protected API call
+            sf_response = _make_api_call()
             
             # Extract response text
             response_text = self._extract_response_text(sf_response)
@@ -1013,22 +1025,28 @@ class ToolCallingHandler:
     ) -> Dict[str, Any]:
         """Generate a non-tool response."""
         try:
-            from llm_endpoint_server import get_thread_client, format_openai_response
+            from llm_endpoint_server import get_thread_client, format_openai_response, with_token_refresh_sync
             
-            client = get_thread_client()
-            if not client:
-                raise Exception("Service not initialized")
+            # Create a token-protected wrapper for the API call
+            @with_token_refresh_sync
+            def _make_api_call():
+                client = get_thread_client()
+                if not client:
+                    raise Exception("Service not initialized")
+                
+                # Convert messages to Salesforce format
+                system_message, final_prompt = self._convert_to_salesforce_format(messages)
+                
+                # Generate response
+                return client.generate_text(
+                    prompt=final_prompt,
+                    model=model,
+                    system_message=system_message,
+                    **kwargs
+                )
             
-            # Convert messages to Salesforce format
-            system_message, final_prompt = self._convert_to_salesforce_format(messages)
-            
-            # Generate response
-            sf_response = client.generate_text(
-                prompt=final_prompt,
-                model=model,
-                system_message=system_message,
-                **kwargs
-            )
+            # Make the protected API call
+            sf_response = _make_api_call()
             
             # Convert to OpenAI format
             return format_openai_response(sf_response, model)

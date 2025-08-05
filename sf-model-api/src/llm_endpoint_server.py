@@ -678,8 +678,9 @@ def force_token_refresh_optimized():
         try:
             token_file = 'salesforce_models_token.json'
             
-            # OPTIMIZED: Increased buffer from 15 minutes to 45 minutes (3x reduction in file I/O)
-            buffer_time = 2700 # 45 minutes instead of 15 minutes
+            # OPTIMIZED: Right-sized buffer from 45 minutes to 30 minutes (balances utilization vs safety)
+            # Analysis: Salesforce tokens have 50-minute lifetime, 30-minute buffer provides 20-minute utilization
+            buffer_time = 1800 # 30 minutes - optimal balance for 50-minute token lifetime
             
             # Use atomic file operation to remove the token file safely
             try:
@@ -807,10 +808,10 @@ def get_cached_token_info():
     with token_cache_lock:
         current_time = time.time()
         
-        # OPTIMIZED: Extended cache validation window from 300 seconds to 2700 seconds (9x improvement)
+        # OPTIMIZED: Extended cache validation window from 300 seconds to 1800 seconds (6x improvement)
         if (token_cache['cache_valid'] and 
             token_cache['expires_at'] > current_time and
-            current_time - token_cache['last_checked'] < 2700): # 45 minutes instead of 5 minutes
+            current_time - token_cache['last_checked'] < 1800): # 30 minutes - balanced cache duration
             
             # Track cache hit and TTL extension benefit
             token_cache['cache_hits'] = token_cache.get('cache_hits', 0) + 1
@@ -930,8 +931,8 @@ def check_token_needs_refresh_optimized():
         current_time = time.time()
         time_until_expiry = expires_at - current_time
         
-        # OPTIMIZED: Extended refresh window to 45 minutes (balanced approach)
-        if time_until_expiry <= 2700: # 45 minutes 
+        # OPTIMIZED: Right-sized refresh window to 30 minutes (optimal utilization)
+        if time_until_expiry <= 1800: # 30 minutes 
             logger.info(f"🕐 Cached token expires in {time_until_expiry/60:.1f} minutes, will refresh proactively (optimized)")
             return True
         else:
@@ -958,8 +959,8 @@ def check_token_needs_refresh_optimized():
                     current_time = time.time()
                     time_until_expiry = expires_at - current_time
                     
-                    # OPTIMIZED: Extended refresh window to 45 minutes (balanced)
-                    if time_until_expiry <= 2700: # 45 minutes
+                    # OPTIMIZED: Right-sized refresh window to 30 minutes (optimal utilization)
+                    if time_until_expiry <= 1800: # 30 minutes
                         logger.info(f"🕐 Token expires in {time_until_expiry/60:.1f} minutes, will refresh proactively (optimized)")
                         return True
                     else:
@@ -1018,7 +1019,7 @@ def ensure_valid_token():
         
         # Refresh if token expires within 5 minutes (300 seconds) - more conservative, safer
         if time_until_expiry <= 300:
-            logger.info(f"🔄 Conservative refresh: Cached token expires in {time_until_expiry/60:.1f} minutes, will refresh")
+            logger.info(f"🔄 Optimal refresh: Cached token expires in {time_until_expiry/60:.1f} minutes, will refresh")
             
             # Invalidate cache and proceed to file-based check
             invalidate_token_cache()
@@ -1046,7 +1047,7 @@ def ensure_valid_token():
                     
                     # CONSERVATIVE: Refresh if token expires within 5 minutes (300 seconds) 
                     if time_until_expiry <= 300:
-                        logger.info(f"🔄 Conservative refresh: Token expires in {time_until_expiry/60:.1f} minutes, invalidating and refreshing before API call")
+                        logger.info(f"🔄 Optimal refresh: Token expires in {time_until_expiry/60:.1f} minutes, invalidating and refreshing before API call")
                         
                         # Invalidate the token file AND cache but with less aggression
                         os.remove(token_file)
@@ -1975,8 +1976,8 @@ def performance_metrics_endpoint():
             "token_cache_optimization": {
                 "status": "active",
                 "optimization_duration_hours": round(optimization_hours, 2),
-                "cache_ttl_minutes": 45,
-                "buffer_time_minutes": 45
+                "cache_ttl_minutes": 30,
+                "buffer_time_minutes": 30
             },
             "performance_metrics": {
                 "cache_hit_rate": round(performance_metrics.get('cache_hit_rate', 0), 2),
