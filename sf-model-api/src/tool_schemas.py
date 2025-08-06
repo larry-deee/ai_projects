@@ -830,7 +830,7 @@ def format_function_definitions(functions: List[FunctionDefinition]) -> str:
 
 def parse_tool_calls_from_response(response_text: str) -> List[Dict[str, Any]]:
     """
-    Parse tool calls from model response text.
+    Parse tool calls from model response text with robust error handling.
     
     Args:
         response_text: Raw response text from the model
@@ -839,7 +839,7 @@ def parse_tool_calls_from_response(response_text: str) -> List[Dict[str, Any]]:
         List of parsed tool call dictionaries
     
     Raises:
-        ValueError: If tool calls cannot be parsed
+        ValueError: If tool calls cannot be parsed after all recovery attempts
     """
     tool_calls = []
     
@@ -865,11 +865,136 @@ def parse_tool_calls_from_response(response_text: str) -> List[Dict[str, Any]]:
                         logger.warning(f"Invalid tool call format: {call}")
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse tool calls JSON: {e}, content: {json_content}")
-            raise ValueError(f"Invalid JSON in tool calls: {e}")
+            
+            # CRITICAL FIX: Attempt JSON cleanup and recovery
+            recovered_calls = _attempt_json_recovery(json_content, e)
+            if recovered_calls:
+                logger.info(f"Successfully recovered {len(recovered_calls)} tool calls after JSON cleanup")
+                tool_calls.extend(recovered_calls)
+            else:
+                # Only raise if recovery failed
+                logger.error(f"JSON recovery failed for: {json_content[:500]}")
+                raise ValueError(f"Invalid JSON in tool calls after recovery attempts: {e}")
     else:
         logger.debug("No tool calls found in response")
     
     return tool_calls
+
+
+def _attempt_json_recovery(malformed_json: str, original_error: json.JSONDecodeError) -> List[Dict[str, Any]]:
+    """
+    Attempt to recover malformed JSON by fixing common issues.
+    
+    Args:
+        malformed_json: The malformed JSON string
+        original_error: The original JSONDecodeError
+        
+    Returns:
+        List of recovered tool call dictionaries, empty if recovery failed
+    """
+    recovered_calls = []
+    
+    try:
+        # Fix 1: Remove extra closing brackets (common n8n issue)
+        cleaned_json = malformed_json.strip()
+        
+        # Count opening and closing brackets to detect mismatched brackets
+        open_brackets = cleaned_json.count('[')
+        close_brackets = cleaned_json.count(']')
+        
+        if close_brackets > open_brackets:
+            # Remove extra closing brackets from the end
+            extra_brackets = close_brackets - open_brackets
+            logger.info(f"Removing {extra_brackets} extra closing brackets")
+            
+            # Remove extra brackets from the end
+            while extra_brackets > 0 and cleaned_json.endswith(']'):
+                cleaned_json = cleaned_json[:-1].strip()
+                extra_brackets -= 1
+        
+        # Fix 2: Ensure proper array format
+        if not cleaned_json.startswith('['):
+            cleaned_json = '[' + cleaned_json
+        if not cleaned_json.endswith(']'):
+            cleaned_json = cleaned_json + ']'
+        
+        # Attempt to parse cleaned JSON
+        parsed_calls = json.loads(cleaned_json)
+        
+        if isinstance(parsed_calls, list):
+            for call in parsed_calls:
+                if isinstance(call, dict) and 'name' in call:
+                    recovered_calls.append(call)
+                    logger.debug(f"Recovered tool call: {call}")
+        
+        logger.info(f"JSON recovery successful: recovered {len(recovered_calls)} calls")
+        return recovered_calls
+        
+    except json.JSONDecodeError as recovery_error:
+        # Fix 3: Try to extract individual tool calls using regex patterns
+        logger.warning(f"Standard JSON recovery failed: {recovery_error}")
+        return _extract_tool_calls_with_regex(malformed_json)
+    
+    except Exception as e:
+        logger.error(f"Unexpected error in JSON recovery: {e}")
+        return []
+
+
+def _extract_tool_calls_with_regex(malformed_json: str) -> List[Dict[str, Any]]:
+    """
+    Extract tool calls using regex patterns as a last resort recovery method.
+    
+    Args:
+        malformed_json: The malformed JSON string
+        
+    Returns:
+        List of extracted tool call dictionaries
+    """
+    import re
+    
+    recovered_calls = []
+    
+    try:
+        # Pattern to extract individual tool call objects
+        tool_call_pattern = r'\{\s*"name"\s*:\s*"([^"]+)"\s*,\s*"arguments"\s*:\s*(\{[^}]*\}|\{[^}]*\})\s*\}'
+        
+        matches = re.findall(tool_call_pattern, malformed_json)
+        
+        for match in matches:
+            function_name = match[0]
+            arguments_str = match[1]
+            
+            try:
+                # Try to parse arguments
+                if arguments_str.strip():
+                    arguments = json.loads(arguments_str)
+                else:
+                    arguments = {}
+                
+                tool_call = {
+                    "name": function_name,
+                    "arguments": arguments
+                }
+                
+                recovered_calls.append(tool_call)
+                logger.debug(f"Regex extracted tool call: {tool_call}")
+                
+            except json.JSONDecodeError:
+                # If arguments can't be parsed, use empty dict
+                tool_call = {
+                    "name": function_name,
+                    "arguments": {}
+                }
+                recovered_calls.append(tool_call)
+                logger.warning(f"Using empty arguments for tool: {function_name}")
+        
+        if recovered_calls:
+            logger.info(f"Regex recovery successful: extracted {len(recovered_calls)} calls")
+        
+    except Exception as e:
+        logger.error(f"Regex recovery failed: {e}")
+    
+    return recovered_calls
 
 
 def create_tool_call_id() -> str:

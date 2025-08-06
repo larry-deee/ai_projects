@@ -75,21 +75,21 @@ cp CLAUDE.md /path/to/your/project/CLAUDE.md
 
 ### Optimizations Implemented & Recommended
 
-#### Phase 1: High-Impact Quick Wins (40-60% latency reduction)
+#### Phase 1: High-Impact Quick Wins
 **Completed:**
 - ✅ Token cache TTL extension (15m → 30m+ buffer)
 - ✅ Response text extraction optimization (single path lookup)
 - ✅ Conversation state bounds implementation (prevent memory leaks)
 - ✅ Regex pattern caching (pre-compile and cache patterns)
 
-#### Phase 2: Medium-Impact Improvements (20-30% throughput gain)
+#### Phase 2: Medium-Impact Improvements
 **In Progress:**
 - 🔄 Adaptive timeout implementation (size and model-aware)
 - 🔄 Thread-local client management optimization
 - 🔄 Memory usage monitoring and alerting
 - 🔄 Request batching for multiple tool calls
 
-#### Phase 3: Advanced Optimizations (15-25% scalability improvement)
+#### Phase 3: Advanced Optimizations
 **Planned:**
 - 📋 Asynchronous processing for non-blocking operations
 - 📋 True response streaming for large responses
@@ -99,7 +99,7 @@ cp CLAUDE.md /path/to/your/project/CLAUDE.md
 ### Performance Metrics to Monitor
 1. **Request Latency:** Average, P95, P99 percentiles
 2. **Memory Usage:** Resident memory, GC frequency, object counts
-3. **Token Cache Hit Rate:** Target >80% hit rate
+3. **Token Cache Hit Rate:** Cache effectiveness measurement
 4. **Error Rates:** Timeouts, auth failures, API errors by type
 5. **Throughput:** Requests per second under concurrent load
 6. **Thread Contention:** Lock wait times, thread utilization
