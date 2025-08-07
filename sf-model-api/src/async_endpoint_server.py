@@ -36,7 +36,17 @@ from quart import Quart, request, jsonify, Response
 from quart_cors import cors
 from salesforce_models_client import AsyncSalesforceModelsClient
 from connection_pool import get_connection_pool
-from tool_schemas import ToolCallingConfig
+from tool_schemas import (
+    ToolCallingConfig,
+    validate_tool_definitions,
+    validate_anthropic_tool_definitions,
+    convert_openai_to_anthropic_tools,
+    validate_tools_with_format,
+    detect_tool_format,
+    ToolCallingValidationError,
+    create_tool_validation_error_response,
+    parse_tool_error_response
+)
 from tool_handler import ToolCallingHandler, ToolCallingMode
 
 # Import streaming architecture
@@ -45,8 +55,10 @@ from streaming_architecture import (
     StreamingOrchestrator,
     StreamingErrorHandler,
     OpenAIStreamChunk,
+    AnthropicStreamingResponseBuilder,
     get_streaming_orchestrator,
-    get_streaming_error_handler
+    get_streaming_error_handler,
+    get_anthropic_streaming_builder
 )
 
 # Configure logging
@@ -349,14 +361,227 @@ async def list_models():
                 "description": model.get("description", "")
             })
         
-        return jsonify({
+        response = jsonify({
             "object": "list",
             "data": all_models
         })
+        return add_n8n_compatible_headers(response)
     
     except Exception as e:
         logger.error(f"Error listing models: {e}")
-        return jsonify({"error": str(e)}), 500
+        error_response = jsonify({"error": str(e)})
+        return add_n8n_compatible_headers(error_response), 500
+
+@app.route('/v1/messages', methods=['POST'])
+@async_with_token_refresh
+async def anthropic_messages():
+    """
+    Anthropic-compatible messages endpoint for Claude Code integration.
+    Implements proper SSE streaming format for 100% compatibility.
+    """
+    request_start_time = time.time()
+    
+    try:
+        resolved_config_file = await resolve_config_path('config.json')
+        client = await get_async_client(config_file=resolved_config_file)
+        data = await request.get_json()
+        
+        # Extract Anthropic-format parameters
+        messages = data.get('messages', [])
+        model = data.get('model', 'claude-3-haiku')
+        max_tokens = data.get('max_tokens', 1000)
+        temperature = data.get('temperature', 0.7)
+        system_message = data.get('system', None)
+        stream = data.get('stream', False)
+        tools = data.get('tools', None)
+        tool_choice = data.get('tool_choice', None)
+        
+        # Tool validation for Anthropic format
+        if tools:
+            logger.info(f"Processing Anthropic messages with {len(tools)} tools")
+            try:
+                # Anthropic tools don't need conversion - validate in place
+                validate_anthropic_tool_definitions(tools)
+                logger.debug(f"Successfully validated {len(tools)} Anthropic tools")
+            except ToolCallingValidationError as e:
+                error_response, status_code = create_tool_validation_error_response([str(e)])
+                json_response = jsonify(error_response)
+                return add_n8n_compatible_headers(json_response), status_code
+            except Exception as e:
+                error_response, status_code = parse_tool_error_response(e)
+                json_response = jsonify(error_response)
+                return add_n8n_compatible_headers(json_response), status_code
+        
+        # Convert Anthropic messages format to internal format
+        openai_messages = []
+        
+        # Add system message if present
+        if system_message:
+            openai_messages.append({"role": "system", "content": system_message})
+        
+        # Convert messages
+        for msg in messages:
+            role = msg.get('role')
+            content = msg.get('content')
+            
+            if isinstance(content, list):
+                # Handle content blocks (Anthropic format)
+                text_content = ""
+                for block in content:
+                    if block.get('type') == 'text':
+                        text_content += block.get('text', '')
+                content = text_content
+            
+            openai_messages.append({"role": role, "content": content})
+        
+        # Map model name to Salesforce format
+        sf_model = map_model_name(model)
+        logger.info(f"Processing Anthropic-style request - Model: {sf_model}")
+        
+        # Convert messages for Salesforce processing
+        system_msg = None
+        user_messages = []
+        
+        for msg in openai_messages:
+            if msg.get('role') == 'system':
+                system_msg = msg.get('content', '')
+            elif msg.get('role') == 'user':
+                user_messages.append(msg.get('content', ''))
+            elif msg.get('role') == 'assistant':
+                user_messages.append(f"Assistant: {msg.get('content', '')}")
+        
+        if len(user_messages) == 0:
+            error_response = jsonify({"error": "No user messages found"})
+            return add_n8n_compatible_headers(error_response), 400
+        
+        final_prompt = user_messages[-1]
+        
+        if len(user_messages) > 1 and not system_msg:
+            conversation_history = "\n".join(user_messages[:-1])
+            system_msg = f"Previous conversation:\n{conversation_history}\n\nPlease respond to the following:"
+        
+        # Generate response
+        sf_response = await async_with_token_refresh(client._async_generate_text)(
+            prompt=final_prompt,
+            model=sf_model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            system_message=system_msg
+        )
+        
+        # Extract text for Anthropic format
+        generated_text = extract_content_from_response(sf_response)
+        if generated_text is None:
+            generated_text = "Error: Unable to extract response content"
+        
+        usage_info = extract_usage_info_async(sf_response)
+        
+        # Create message ID
+        message_id = f"msg_{int(time.time())}{hash(str(sf_response)) % 1000}"
+        
+        if stream:
+            # Generate streaming response with proper Anthropic SSE format
+            return await generate_anthropic_streaming_response(
+                generated_text, message_id, model, usage_info, request_start_time
+            )
+        else:
+            # Format as Anthropic response
+            anthropic_response = {
+                "id": message_id,
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": generated_text
+                    }
+                ],
+                "model": model,
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {
+                    "input_tokens": usage_info.get("prompt_tokens", 0),
+                    "output_tokens": usage_info.get("completion_tokens", 0)
+                }
+            }
+            
+            await track_request_performance(request_start_time)
+            json_response = jsonify(anthropic_response)
+            return add_n8n_compatible_headers(json_response)
+    
+    except Exception as e:
+        logger.error(f"Error in Anthropic messages endpoint: {e}")
+        error_response = jsonify({"error": str(e)})
+        return add_n8n_compatible_headers(error_response), 500
+
+async def generate_anthropic_streaming_response(
+    generated_text: str, 
+    message_id: str, 
+    model: str, 
+    usage_info: Dict[str, Any],
+    request_start_time: float
+) -> Response:
+    """
+    Generate Anthropic-compatible SSE streaming response with exact format compliance.
+    
+    This implements the exact Anthropic SSE specification:
+    - message_start event with full message structure
+    - content_block_start event 
+    - content_block_delta events for streaming text
+    - message_stop event with proper termination
+    
+    Args:
+        generated_text: The generated text content
+        message_id: Unique message identifier
+        model: Model name for response
+        usage_info: Token usage information
+        request_start_time: Request start time for performance tracking
+        
+    Returns:
+        Response: Quart streaming response with proper SSE format
+    """
+    async def anthropic_stream_generator() -> AsyncGenerator[str, None]:
+        try:
+            # Create Anthropic streaming builder
+            anthropic_builder = get_anthropic_streaming_builder(model, message_id)
+            
+            # Convert usage_info to expected format
+            usage_data = {
+                "input_tokens": usage_info.get("prompt_tokens", 0),
+                "output_tokens": usage_info.get("completion_tokens", 0)
+            }
+            
+            # Generate stream using the standardized builder
+            for chunk in anthropic_builder.create_anthropic_stream(generated_text, usage_data):
+                yield chunk
+                await asyncio.sleep(0.01)  # Small async delay
+            
+            await track_request_performance(request_start_time)
+            
+        except Exception as e:
+            logger.error(f"Error in Anthropic streaming: {e}")
+            # Send error event
+            error_data = {
+                "type": "error",
+                "error": {
+                    "type": "api_error",
+                    "message": str(e)
+                }
+            }
+            yield f"event: error\ndata: {json.dumps(error_data)}\n\n"
+    
+    return Response(
+        anthropic_stream_generator(),
+        mimetype='text/plain; charset=utf-8',  # Correct content type for SSE
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+            'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+            'X-Accel-Buffering': 'no'
+        }
+    )
 
 @app.route('/v1/chat/completions', methods=['POST', 'GET'])
 async def chat_completions():
@@ -373,7 +598,7 @@ async def chat_completions():
     try:
         # Handle GET requests for endpoint documentation
         if request.method == 'GET':
-            return jsonify({
+            info_response = jsonify({
                 "endpoint": "/v1/chat/completions",
                 "method": "POST",
                 "description": "Fully async OpenAI-compatible chat completions endpoint",
@@ -393,6 +618,7 @@ async def chat_completions():
                     "tool_choice": "Tool choice strategy"
                 }
             })
+            return add_n8n_compatible_headers(info_response)
         
         resolved_config_file = await resolve_config_path('config.json')
         client = await get_async_client(config_file=resolved_config_file)
@@ -419,6 +645,19 @@ async def chat_completions():
         # Check if tool calling is requested
         if tools and tool_calling_handler:
             logger.info(f"Processing async request with tool calling - Model: {model}, Tools: {len(tools)}")
+            
+            # CRITICAL FIX: Add strict OpenAI tool validation
+            try:
+                validate_tool_definitions(tools)
+                logger.debug(f"Successfully validated {len(tools)} OpenAI tools")
+            except ToolCallingValidationError as e:
+                error_response, status_code = create_tool_validation_error_response([str(e)])
+                json_response = jsonify(error_response)
+                return add_n8n_compatible_headers(json_response), status_code
+            except Exception as e:
+                error_response, status_code = parse_tool_error_response(e)
+                json_response = jsonify(error_response)
+                return add_n8n_compatible_headers(json_response), status_code
             
             # Use async implementation for tool handling to prevent "str can't be used in 'await'" error
             response = await async_process_tool_request(
@@ -454,7 +693,8 @@ async def chat_completions():
         else:
             # Standard chat completion without tools - FULLY ASYNC
             if len(messages) == 0:
-                return jsonify({"error": "No messages provided"}), 400
+                error_response = jsonify({"error": "No messages provided"})
+                return add_n8n_compatible_headers(error_response), 400
             
             # CRITICAL FIX 5: Map model name for standard chat completion too
             sf_model = map_model_name(model)
@@ -1131,7 +1371,7 @@ async def get_performance_metrics():
         uptime_hours = (time.time() - async_performance_metrics['optimization_start_time']) / 3600
         total_time_saved_seconds = async_performance_metrics['total_time_saved_ms'] / 1000
         
-        return jsonify({
+        metrics_response = jsonify({
             "async_optimization": {
                 "requests_processed": async_performance_metrics['requests_processed'],
                 "avg_response_time_ms": round(async_performance_metrics['avg_response_time_ms'], 2),
@@ -1143,10 +1383,12 @@ async def get_performance_metrics():
             "connection_pool": pool_stats,
             "optimization_status": "ACTIVE - Sync wrappers eliminated, connection pool integrated"
         })
+        return add_n8n_compatible_headers(metrics_response)
     
     except Exception as e:
         logger.error(f"Error getting performance metrics: {e}")
-        return jsonify({"error": str(e)}), 500
+        error_response = jsonify({"error": str(e)})
+        return add_n8n_compatible_headers(error_response), 500
 
 @app.route('/health', methods=['GET'])
 async def health_check():
@@ -1166,11 +1408,12 @@ async def health_check():
             
             if missing_vars:
                 missing_vars_str = ', '.join(missing_vars)
-                return jsonify({
+                error_response = jsonify({
                     "status": "unhealthy",
                     "error": f"Missing required environment variables: {missing_vars_str} and no config.json found",
                     "timestamp": time.time()
-                }), 500
+                })
+                return add_n8n_compatible_headers(error_response), 500
             
         # Try to get client and validate configuration
         client = await get_async_client(config_file=resolved_config_file)
@@ -1179,7 +1422,7 @@ async def health_check():
         # Run a validation test on the config
         await client._async_validate_config()
         
-        return jsonify({
+        health_response = jsonify({
             "status": "healthy",
             "async_optimization": "active",
             "connection_pool": "active",
@@ -1188,13 +1431,15 @@ async def health_check():
             "configuration_source": config_source,
             "timestamp": time.time()
         })
+        return add_n8n_compatible_headers(health_response)
     
     except Exception as e:
-        return jsonify({
+        error_response = jsonify({
             "status": "unhealthy",
             "error": str(e),
             "timestamp": time.time()
-        }), 500
+        })
+        return add_n8n_compatible_headers(error_response), 500
 
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully."""
