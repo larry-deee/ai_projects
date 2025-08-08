@@ -59,8 +59,8 @@ curl http://localhost:8000/v1/models
 
 - ✅ **100% OpenAI API Compatible** - Works with OpenWebUI, n8n, LangChain, and standard OpenAI clients
 - ✅ **Complete Tool Calling** - Full OpenAI function calling with built-in safe functions and passthrough mode
-- ✅ **n8n Compatibility Mode** - Automatic client detection and behavior adaptation for seamless n8n integration
-- ✅ **Enterprise Authentication** - OAuth 2.0 Client Credentials Flow with aggressive token management
+- ✅ **n8n Compatibility Mode** - Automatic client detection (n8n and openai/js) for seamless integration
+- ✅ **Enterprise Authentication** - OAuth 2.0 Client Credentials Flow with token pre-warming and aggressive management
 - ✅ **Thread-Safe Architecture** - Scalable design with multi-layer token caching
 - ✅ **Smart Timeout Management** - Dynamic timeouts based on request characteristics
 - ✅ **Streaming Support** - Real-time response streaming with proper OpenAI chunk formatting and SSE heartbeats
@@ -112,7 +112,7 @@ export SALESFORCE_PRIVATE_KEY_FILE="/path/to/server.key"
 export SALESFORCE_API_VERSION="v64.0"
 export ENVIRONMENT="development"
 export SF_RESPONSE_DEBUG="false"
-export N8N_COMPAT_MODE="1"     # Set to "0" to disable n8n compatibility mode
+export N8N_COMPAT_MODE="1"     # Set to "0" to disable n8n compatibility mode (includes openai/js clients)
 export VERBOSE_TOOL_LOGS="0"   # Set to "1" for detailed tool calling logs
 ```
 
@@ -276,7 +276,7 @@ This behavior ensures compatibility with tools like n8n v1.105.4 and Claude Code
 
 ### Behavior
 
-The API gateway implements intelligent client detection and adapts its behavior accordingly. When `tools` are present in a request from an n8n client (detected via User-Agent) or when `N8N_COMPAT_MODE=1` is set, the gateway automatically:
+The API gateway implements intelligent client detection and adapts its behavior accordingly. When `tools` are present in a request from an n8n client or openai/js client (detected via User-Agent) or when `N8N_COMPAT_MODE=1` is set, the gateway automatically:
 
 - Returns non-streaming responses even when `stream=true` is requested
 - Adds `x-stream-downgraded: true` header to indicate streaming was disabled
@@ -326,7 +326,7 @@ For full model details and configuration, see [docs/ARCHITECTURE.md](docs/ARCHIT
 
 ### Authentication Issues
 
-**Problem**: "Failed to obtain access token"
+**Problem**: "Failed to obtain access token" (rare with token pre-warming enabled)
 
 **Solution**:
 1. Verify environment variables are set correctly
@@ -401,7 +401,7 @@ API Key: any-key
 }
 ```
 
-The n8n compatibility mode is automatically enabled for n8n User-Agents, ensuring proper handling of tool requests and streaming behavior.
+The n8n compatibility mode is automatically enabled for n8n and openai/js User-Agents, ensuring proper handling of tool requests and streaming behavior. Token pre-warming during server startup eliminates first-request authentication delays.
 
 ### LangChain
 ```python

@@ -8,10 +8,11 @@ This implementation adds n8n-compatible mode with strict tool gating and safe fa
 
 ### 1. n8n Detection and Compatibility Mode
 
-- **User-Agent Detection**: Automatically detects n8n clients by checking for 'n8n' in the User-Agent header
+- **Enhanced User-Agent Detection**: Automatically detects n8n clients by checking for 'n8n' in the User-Agent header or 'openai/js' at the start of the User-Agent
 - **Environment Variable Control**: `N8N_COMPAT_MODE` environment variable (default: enabled)
 - **Forced Non-Tool Behavior**: When n8n is detected, incoming tools are ignored and tool_choice is set to "none"
 - **Streaming Downgrade**: Automatically downgrades streaming to non-streaming for n8n compatibility
+- **Token Pre-warming**: Server startup includes OAuth token pre-warming to eliminate first-request 401 errors
 
 ### 2. Strict Tool Entry Conditions
 
@@ -24,6 +25,7 @@ This implementation adds n8n-compatible mode with strict tool gating and safe fa
 - **Null Content Protection**: Ensures response content is never null, always returns empty string as fallback
 - **Empty Tool Calls Handling**: Omits tool_calls arrays when empty instead of returning empty arrays
 - **Consistent Error Handling**: All response paths include null content protection
+- **JSON Parsing Robustness**: Enhanced handling for code fences (```json) in model responses
 
 ### 4. Enhanced Logging
 
@@ -67,7 +69,7 @@ python test_n8n_integration.py
 
 ## Usage Examples
 
-### n8n Client Request (Auto-Detected)
+### n8n or openai/js Client Request (Auto-Detected)
 ```javascript
 // n8n workflow - tools are automatically ignored
 curl -X POST http://localhost:8000/v1/chat/completions \
@@ -124,9 +126,26 @@ The implementation includes comprehensive logging:
 🔧 N8N compatibility mode: ignoring tools and forcing non-tool behavior (UA: n8n/1.0, ENV: True)
 🔧 N8N compatibility mode: downgrading streaming to non-streaming  
 🔧 FIXED: Async tool processing for 0 tools with model claude-3-haiku
+🔐 OAuth token pre-warmed successfully
 ```
 
 Enable detailed tool logs:
 ```bash
 export VERBOSE_TOOL_LOGS=1
 ```
+
+## Enhanced Reliability Features
+
+### Token Pre-warming
+
+The server now pre-warms OAuth tokens during startup to eliminate first-request 401 errors:
+
+- Automatically obtains an authentication token during server initialization
+- Handles connection errors gracefully during startup
+- Logs token status: `🔐 OAuth token pre-warmed successfully` or warning if failed
+- Falls back to on-demand token refresh if pre-warming fails
+
+### Extended Client Compatibility
+
+- **openai/js Detection**: User agents starting with 'openai/js' are now treated as n8n-compatible clients
+- **Improved JSON Handling**: Better handling of model responses that may contain code fences (```json)

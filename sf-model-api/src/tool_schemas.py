@@ -1026,9 +1026,23 @@ def format_function_definitions(functions: List[FunctionDefinition]) -> str:
     return "\n\n".join(formatted_functions)
 
 
+def _strip_code_fences(text: str) -> str:
+    """
+    Remove Markdown code fences like ```json ... ``` or ``` ... ``` that commonly wrap tool-call JSON.
+    
+    Args:
+        text: Text that may contain code fences
+        
+    Returns:
+        Text with code fences removed
+    """
+    import re
+    return re.sub(r"```[a-zA-Z]*\s*(.*?)```", r"\1", text, flags=re.DOTALL)
+
+
 def parse_tool_calls_from_response(response_text: str) -> List[Dict[str, Any]]:
     """
-    Parse tool calls from model response text with robust error handling.
+    Parse tool calls from model response text with robust error handling and fence-tolerant parsing.
     
     Args:
         response_text: Raw response text from the model
@@ -1048,47 +1062,60 @@ def parse_tool_calls_from_response(response_text: str) -> List[Dict[str, Any]]:
         # Pattern 2: Alternative tags that n8n might use
         ("<tool_calls>", "</tool_calls>"),
         ("TOOL_CALLS:", "\n\n"),
-        # Pattern 3: JSON array without tags
-        ("[", None),  # Special case for direct JSON arrays
+        # Pattern 3: Strict JSON array detection (hardened)
+        ("STRICT_JSON_ARRAY", None),  # Special case for strict JSON array detection
     ]
     
     json_content = None
     
     for start_tag, end_tag in extraction_patterns:
-        start_idx = response_text.find(start_tag)
-        
-        if start_idx != -1:
-            if end_tag is None:  # Special case for direct JSON arrays
-                # Look for JSON array starting with [
-                potential_json = response_text[start_idx:]
-                # Find the matching closing bracket
-                bracket_count = 0
-                end_idx = start_idx
-                
-                for i, char in enumerate(potential_json):
-                    if char == '[':
-                        bracket_count += 1
-                    elif char == ']':
-                        bracket_count -= 1
-                        if bracket_count == 0:
-                            end_idx = start_idx + i + 1
-                            break
-                
-                if bracket_count == 0 and end_idx > start_idx:
-                    json_content = response_text[start_idx:end_idx]
-                    break
-            else:
-                end_idx = response_text.find(end_tag, start_idx)
-                if end_idx != -1 and end_idx > start_idx:
-                    if start_tag == "TOOL_CALLS:":
-                        json_content = response_text[start_idx + len(start_tag):end_idx].strip()
-                    else:
-                        json_content = response_text[start_idx + len(start_tag):end_idx].strip()
-                    break
+        if start_tag == "STRICT_JSON_ARRAY":
+            # Special handling for strict JSON array detection (always try this pattern)
+            import re
+            json_array_pattern = r"\[\s*\{[\s\S]*?\}\s*(?:,\s*\{[\s\S]*?\}\s*)*\s*\]"
+            match = re.search(json_array_pattern, response_text)
+            if match:
+                json_content = match.group(0)
+                break
+        else:
+            # Standard tag-based extraction
+            start_idx = response_text.find(start_tag)
+            
+            if start_idx != -1:
+                if end_tag is None:  # Legacy bracket counting fallback  
+                    # Legacy bracket counting (fallback for direct JSON arrays)
+                    potential_json = response_text[start_idx:]
+                    # Find the matching closing bracket
+                    bracket_count = 0
+                    end_idx = start_idx
+                    
+                    for i, char in enumerate(potential_json):
+                        if char == '[':
+                            bracket_count += 1
+                        elif char == ']':
+                            bracket_count -= 1
+                            if bracket_count == 0:
+                                end_idx = start_idx + i + 1
+                                break
+                    
+                    if bracket_count == 0 and end_idx > start_idx:
+                        json_content = response_text[start_idx:end_idx]
+                        break
+                else:
+                    # Standard tag-based extraction with end tags
+                    end_idx = response_text.find(end_tag, start_idx)
+                    if end_idx != -1 and end_idx > start_idx:
+                        if start_tag == "TOOL_CALLS:":
+                            json_content = response_text[start_idx + len(start_tag):end_idx].strip()
+                        else:
+                            json_content = response_text[start_idx + len(start_tag):end_idx].strip()
+                        break
     
     if json_content:
-        # Pre-process n8n-specific patterns before JSON parsing
-        processed_content = _preprocess_n8n_tool_calls(json_content)
+        # Apply fence stripping before preprocessing to handle ```json fences
+        fence_stripped_content = _strip_code_fences(json_content)
+        # Pre-process n8n-specific patterns after fence stripping
+        processed_content = _preprocess_n8n_tool_calls(fence_stripped_content)
         
         try:
             parsed_calls = json.loads(processed_content)
@@ -1112,7 +1139,7 @@ def parse_tool_calls_from_response(response_text: str) -> List[Dict[str, Any]]:
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse tool calls JSON: {e}")
             
-            # Enhanced recovery with strict compliance validation
+            # Enhanced recovery with strict compliance validation and fence stripping
             recovered_calls = _attempt_json_recovery_with_compliance(processed_content, e)
             if recovered_calls:
                 logger.info(f"Successfully recovered {len(recovered_calls)} compliant tool calls")
@@ -1137,7 +1164,7 @@ def parse_tool_calls_from_response(response_text: str) -> List[Dict[str, Any]]:
 
 def _attempt_json_recovery(malformed_json: str, original_error: json.JSONDecodeError) -> List[Dict[str, Any]]:
     """
-    Attempt to recover malformed JSON by fixing common issues.
+    Attempt to recover malformed JSON by fixing common issues with fence-tolerant parsing.
     
     Args:
         malformed_json: The malformed JSON string
@@ -1149,8 +1176,10 @@ def _attempt_json_recovery(malformed_json: str, original_error: json.JSONDecodeE
     recovered_calls = []
     
     try:
+        # Fix 0: Apply fence stripping at start of recovery process
+        fence_stripped = _strip_code_fences(malformed_json)
         # Fix 1: Remove extra closing brackets (common n8n issue)
-        cleaned_json = malformed_json.strip()
+        cleaned_json = fence_stripped.strip()
         
         # Count opening and closing brackets to detect mismatched brackets
         open_brackets = cleaned_json.count('[')
