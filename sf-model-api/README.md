@@ -59,6 +59,7 @@ curl http://localhost:8000/v1/models
 
 - ✅ **100% OpenAI API Compatible** - Works with OpenWebUI, n8n, LangChain, and standard OpenAI clients
 - ✅ **Complete Tool Calling** - Full OpenAI function calling with built-in safe functions and passthrough mode
+- ✅ **n8n Compatibility Mode** - Automatic client detection and behavior adaptation for seamless n8n integration
 - ✅ **Enterprise Authentication** - OAuth 2.0 Client Credentials Flow with aggressive token management
 - ✅ **Thread-Safe Architecture** - Scalable design with multi-layer token caching
 - ✅ **Smart Timeout Management** - Dynamic timeouts based on request characteristics
@@ -111,6 +112,8 @@ export SALESFORCE_PRIVATE_KEY_FILE="/path/to/server.key"
 export SALESFORCE_API_VERSION="v64.0"
 export ENVIRONMENT="development"
 export SF_RESPONSE_DEBUG="false"
+export N8N_COMPAT_MODE="1"     # Set to "0" to disable n8n compatibility mode
+export VERBOSE_TOOL_LOGS="0"   # Set to "1" for detailed tool calling logs
 ```
 
 ### Configuration File
@@ -271,6 +274,17 @@ For detailed information on streaming behavior and client integration, see [docs
 
 This behavior ensures compatibility with tools like n8n v1.105.4 and Claude Code.
 
+### Behavior
+
+The API gateway implements intelligent client detection and adapts its behavior accordingly. When `tools` are present in a request from an n8n client (detected via User-Agent) or when `N8N_COMPAT_MODE=1` is set, the gateway automatically:
+
+- Returns non-streaming responses even when `stream=true` is requested
+- Adds `x-stream-downgraded: true` header to indicate streaming was disabled
+- Ignores tool metadata to ensure compatibility with n8n's JSON parser
+- Adds `x-proxy-latency-ms` header to all non-streaming responses for diagnostics
+
+These adaptations ensure seamless integration with n8n workflows while maintaining full functionality for other clients. Regular clients continue to receive streaming responses (unless tools are present, which always requires stream downgrading). Set `N8N_COMPAT_MODE=0` to disable this behavior if needed.
+
 ### Production
 
 ```bash
@@ -368,10 +382,26 @@ API Key: any-key
   "headers": {"Content-Type": "application/json"},
   "body": {
     "model": "claude-3-haiku",
-    "messages": [{"role": "user", "content": "Process this data"}]
+    "messages": [{"role": "user", "content": "Process this data"}],
+    "tools": [{
+      "type": "function",
+      "function": {
+        "name": "extract_data",
+        "description": "Extract structured data",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name": {"type": "string"},
+            "value": {"type": "number"}
+          }
+        }
+      }
+    }]
   }
 }
 ```
+
+The n8n compatibility mode is automatically enabled for n8n User-Agents, ensuring proper handling of tool requests and streaming behavior.
 
 ### LangChain
 ```python
