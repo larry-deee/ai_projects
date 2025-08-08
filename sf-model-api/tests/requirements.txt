@@ -1,0 +1,119 @@
+# Test Suite Requirements for Salesforce Models API Gateway
+# ========================================================
+
+# Core testing framework
+unittest2>=1.1.0
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-xdist>=3.3.0  # For parallel test execution
+
+# HTTP testing and mocking
+requests>=2.31.0
+responses>=0.23.0
+httpx>=0.24.0  # For async HTTP testing
+
+# JSON schema validation for API compliance
+jsonschema>=4.19.0
+
+# Performance testing and monitoring
+psutil>=5.9.0  # For memory and process monitoring
+memory-profiler>=0.61.0  # For memory profiling
+
+# Concurrent testing utilities
+concurrent-futures>=3.1.1; python_version<"3.0"
+
+# Test data generation and mocking
+faker>=19.0.0
+factory-boy>=3.3.0
+
+# Test reporting and coverage
+coverage>=7.3.0
+pytest-html>=3.2.0  # For HTML test reports
+pytest-cov>=4.1.0   # For coverage reports
+
+# Database testing (if needed for integration)
+sqlalchemy>=2.0.0
+alembic>=1.12.0
+
+# Environment and configuration management
+python-dotenv>=1.0.0
+pyyaml>=6.0
+
+# Async testing utilities
+asynctest>=0.13.0; python_version<"3.8"
+aiounittest>=1.4.2
+
+# API testing utilities
+openapi-spec-validator>=0.6.0
+swagger-spec-validator>=3.0.0
+
+# Load testing utilities
+locust>=2.16.0  # For load testing capabilities
+
+# Time and date utilities for testing
+freezegun>=1.2.0  # For mocking datetime
+
+# Network testing utilities
+paramiko>=3.3.0  # For SSH testing if needed
+requests-mock>=1.11.0
+
+# Data validation and parsing
+pydantic>=2.0.0
+marshmallow>=3.20.0
+
+# Logging and debugging utilities for tests
+structlog>=23.1.0
+loguru>=0.7.0
+
+# Test fixtures and utilities
+pytest-mock>=3.11.0
+pytest-timeout>=2.1.0
+pytest-benchmark>=4.0.0  # For performance benchmarking
+
+# Async HTTP client for testing
+aiohttp>=3.8.0
+aioresponses>=0.7.0  # For mocking aiohttp
+
+# XML/HTML parsing for response validation
+lxml>=4.9.0
+beautifulsoup4>=4.12.0
+
+# Regular expression testing utilities
+regex>=2023.8.0
+
+# Parallel processing for load tests
+multiprocessing-logging>=0.3.0
+
+# Test data serialization
+pickle5>=0.0.12; python_version<"3.8"
+
+# Network utilities for integration testing
+netifaces>=0.11.0
+ping3>=4.0.0
+
+# Additional testing utilities
+tox>=4.11.0  # For testing across Python versions
+nox>=2023.4.0  # Alternative to tox
+
+# Documentation testing
+doctest>=2.4.0
+
+# Performance regression detection
+asv>=0.6.0  # Airspeed velocity for performance tracking
+
+# Test environment isolation
+virtualenv>=20.24.0
+venv-pack>=0.2.0
+
+# Security testing utilities
+bandit>=1.7.0
+safety>=2.3.0
+
+# Code quality and linting for test files
+flake8>=6.0.0
+black>=23.7.0
+mypy>=1.5.0
+
+# Additional data formats for test data
+toml>=0.10.0
+orjson>=3.9.0  # Fast JSON for performance tests
