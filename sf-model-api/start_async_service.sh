@@ -162,6 +162,13 @@ start_service() {
     echo ""
     
     if [ "$ENVIRONMENT" == "production" ]; then
+        # Set environment variables for enhanced functionality
+        export SF_RESPONSE_DEBUG="${SF_RESPONSE_DEBUG:-false}"
+        export N8N_COMPAT_MODE="${N8N_COMPAT_MODE:-1}"
+        export VERBOSE_TOOL_LOGS="${VERBOSE_TOOL_LOGS:-0}"
+        export N8N_COMPAT_PRESERVE_TOOLS="${N8N_COMPAT_PRESERVE_TOOLS:-1}"
+        export OPENAI_NATIVE_TOOL_PASSTHROUGH="${OPENAI_NATIVE_TOOL_PASSTHROUGH:-1}"
+        
         # Production: start with optimized async gunicorn config
         $GUNICORN_CMD src.async_endpoint_server:app --daemon
         
@@ -180,11 +187,24 @@ start_service() {
     else
         # Development: start async server directly
         log_info "Starting async development server..."
+        
+        # Set environment variables for enhanced functionality
+        export SF_RESPONSE_DEBUG="${SF_RESPONSE_DEBUG:-false}"
+        export N8N_COMPAT_MODE="${N8N_COMPAT_MODE:-1}"
+        export VERBOSE_TOOL_LOGS="${VERBOSE_TOOL_LOGS:-0}"
+        export N8N_COMPAT_PRESERVE_TOOLS="${N8N_COMPAT_PRESERVE_TOOLS:-1}"
+        export OPENAI_NATIVE_TOOL_PASSTHROUGH="${OPENAI_NATIVE_TOOL_PASSTHROUGH:-1}"
+        
         echo "🎯 Features enabled:"
         echo "   • Connection pooling (20-30% improvement)"
         echo "   • Async architecture (40-60% improvement)"
         echo "   • Auto-reload on code changes"
         echo "   • Performance monitoring endpoints"
+        echo "   • n8n compatibility: $([ "$N8N_COMPAT_MODE" = "1" ] && echo "✅ ENABLED" || echo "❌ DISABLED")"
+        echo "   • n8n tool preservation: $([ "$N8N_COMPAT_PRESERVE_TOOLS" = "1" ] && echo "✅ ENABLED" || echo "❌ DISABLED")"
+        echo "   • OpenAI-native passthrough: $([ "$OPENAI_NATIVE_TOOL_PASSTHROUGH" = "1" ] && echo "✅ ENABLED" || echo "❌ DISABLED")"
+        echo "   • Verbose tool logs: $([ "$VERBOSE_TOOL_LOGS" = "1" ] && echo "✅ ENABLED" || echo "❌ DISABLED")"
+        echo "   • Response debug: $([ "$SF_RESPONSE_DEBUG" = "true" ] && echo "✅ ENABLED" || echo "❌ DISABLED")"
         echo ""
         cd src && exec python3 async_endpoint_server.py
     fi
@@ -273,8 +293,14 @@ main() {
             ;;
         *)
             echo "Usage: $0 {start|stop|status|restart|test}"
+            echo ""
             echo "  Environment variables:"
             echo "    ENVIRONMENT=development|production"
+            echo "    SF_RESPONSE_DEBUG=true|false        - Enable detailed response logging"
+            echo "    N8N_COMPAT_MODE=1|0                 - Enable n8n/openai-js compatibility (default: 1)"
+            echo "    VERBOSE_TOOL_LOGS=1|0               - Enable detailed tool calling logs (default: 0)"
+            echo "    N8N_COMPAT_PRESERVE_TOOLS=1|0       - Preserve tools for n8n clients (default: 1)"
+            echo "    OPENAI_NATIVE_TOOL_PASSTHROUGH=1|0  - Enable OpenAI-native model passthrough (default: 1)"
             echo ""
             echo "  Commands:"
             echo "    start   - Start the async service"

@@ -48,6 +48,7 @@ from tool_schemas import (
     parse_tool_error_response
 )
 from tool_handler import ToolCallingHandler, ToolCallingMode
+from model_router import get_model_router, is_openai_native_model
 
 # Import streaming architecture
 from streaming_architecture import (
@@ -685,10 +686,13 @@ async def chat_completions():
         # CRITICAL FIX: Capture original stream request BEFORE any modifications
         original_stream_requested = stream
         
-        # N8N COMPATIBILITY: Detect n8n caller and force non-tool behavior
+        # N8N TOOL BEHAVIOUR COMPATIBILITY: Detect n8n caller and apply tool preservation logic
         user_agent = request.headers.get('User-Agent', '').lower()
         n8n_compat_env = os.environ.get('N8N_COMPAT_MODE', '1') == '1'  # Default enabled
         n8n_detected = (('n8n' in user_agent) or user_agent.startswith('openai/js')) and n8n_compat_env
+        
+        # Tool preservation setting - allows preserving tools while disabling streaming
+        PRESERVE_TOOLS = os.getenv("N8N_COMPAT_PRESERVE_TOOLS", "1") == "1"
         
         # DEBUG: Temporary logging for n8n detection
         logger.warning(f"🔍 DEBUG ALL REQUESTS: UA='{user_agent}', has_n8n={n8n_detected}, compat_env={n8n_compat_env}, detected={n8n_detected}")
@@ -696,13 +700,17 @@ async def chat_completions():
             logger.warning(f"🔍 DEBUG: n8n User-Agent detected: {user_agent[:50]}, compat_env: {n8n_compat_env}, detected: {n8n_detected}")
         
         if n8n_detected:
-            if tools or tool_choice:
-                logger.warning(f"🔧 N8N compatibility mode: ignoring tools and forcing non-tool behavior (UA: {user_agent[:50]}, ENV: {n8n_compat_env})")
-            tools = None  # Force ignore incoming tools
-            tool_choice = "none"  # Force disable tool choice
+            # NEW BEHAVIOR: Preserve tools but disable streaming for n8n compatibility
             if stream:
-                logger.warning(f"🔧 N8N compatibility mode: downgrading streaming to non-streaming")
-                stream = False  # Downgrade streaming for n8n compatibility
+                logger.warning("🔧 N8N compat: streaming disabled (non-streaming).")
+                stream = False
+            if PRESERVE_TOOLS:
+                logger.warning("🔧 N8N compat: tools PRESERVED (tool_choice unchanged).")
+            else:
+                # Legacy behavior if PRESERVE_TOOLS=0
+                logger.warning("🔧 N8N compat: tools IGNORED (PRESERVE_TOOLS=0).")
+                tools = None
+                tool_choice = "none"
         
         # OPTIMIZATION: Default non-stream for tool calls (improves local usage stability)
         if stream and tools:
@@ -715,6 +723,15 @@ async def chat_completions():
         # Track optimization metrics
         async_performance_metrics['requests_processed'] += 1
         async_performance_metrics['sync_wrapper_eliminations'] += 1
+        
+        # TOOL BEHAVIOUR COMPATIBILITY LAYER: Enhanced tool routing with model-aware decisions
+        model_router = get_model_router()
+        routing_info = model_router.get_routing_info(model, tools)
+        is_openai_native = routing_info["routing_decision"]["use_direct_passthrough"]
+        
+        # Log routing decision for debugging
+        if tools:
+            logger.info(f"🔧 Tool routing: model={model}, native={is_openai_native}, backend={routing_info['capabilities']['backend_type']}")
         
         # STRICT TOOL ENTRY CONDITIONS: Only enter tool path if tools are valid and tool_choice allows it
         has_valid_tools = _has_valid_tools(tools)
@@ -761,6 +778,43 @@ async def chat_completions():
                 # Check if it's already in OpenAI format or needs formatting
                 if isinstance(response, dict) and "choices" in response and "object" in response:
                     # Already formatted OpenAI response from tool handler
+                    # CRITICAL FIX: Convert XML function_calls to OpenAI tool_calls format for n8n compatibility
+                    if response.get('choices') and len(response['choices']) > 0:
+                        message = response['choices'][0].get('message', {})
+                        response_content = message.get('content', '')
+                        
+                        # Detect XML function_calls in content and convert to OpenAI format
+                        if response_content and isinstance(response_content, str) and "<function_calls>" in response_content:
+                            try:
+                                # Extract tool calls from XML using existing parsing logic
+                                from tool_schemas import parse_tool_calls_from_response
+                                from response_normaliser import normalise_assistant_tool_response
+                                
+                                # Parse tool calls from the XML content
+                                tool_calls = parse_tool_calls_from_response(response_content)
+                                
+                                if tool_calls and len(tool_calls) > 0:
+                                    logger.info(f"🔧 Converting {len(tool_calls)} XML tool calls to OpenAI format for n8n compatibility (pre-formatted path)")
+                                    
+                                    # Tool calls are already in OpenAI format from parsing
+                                    openai_tool_calls = tool_calls
+                                    
+                                    # Apply normalization to set proper schema
+                                    if openai_tool_calls:
+                                        normalized_message = normalise_assistant_tool_response(
+                                            message, openai_tool_calls, "tool_calls"
+                                        )
+                                        
+                                        # Update the response with converted tool calls
+                                        response['choices'][0]['message'] = normalized_message
+                                        response['choices'][0]['finish_reason'] = "tool_calls"
+                                        
+                                        logger.info(f"✅ Successfully converted XML to OpenAI tool_calls format (pre-formatted path)")
+                                    
+                            except Exception as e:
+                                logger.error(f"❌ Failed to convert XML tool calls to OpenAI format (pre-formatted path): {e}")
+                                # Continue with original response if conversion fails
+                        
                     # SAFE RESPONSE: Ensure content is never null
                     if response.get('choices') and len(response['choices']) > 0:
                         message = response['choices'][0].get('message', {})
@@ -773,8 +827,51 @@ async def chat_completions():
                     proxy_latency = (time.time() - request_start_time) * 1000
                     return add_n8n_compatible_headers(json_response, stream_downgraded=(original_stream_requested and tools), proxy_latency_ms=proxy_latency)
                 else:
-                    # Raw response needs formatting
+                    # Raw response needs formatting with model router normalization
                     openai_response = await format_openai_response_async(response, model)
+                    
+                    # TOOL BEHAVIOUR COMPATIBILITY: Apply response normalization for cross-backend compatibility
+                    if tools and not is_openai_native:
+                        openai_response = model_router.normalize_tool_response(openai_response, model, tools)
+                        logger.debug(f"🔧 Applied response normalization for {model}")
+                    
+                    # CRITICAL FIX: Convert XML function_calls to OpenAI tool_calls format for n8n compatibility
+                    if openai_response.get('choices') and len(openai_response['choices']) > 0:
+                        message = openai_response['choices'][0].get('message', {})
+                        response_content = message.get('content', '')
+                        
+                        # Detect XML function_calls in content and convert to OpenAI format
+                        if response_content and isinstance(response_content, str) and "<function_calls>" in response_content:
+                            try:
+                                # Extract tool calls from XML using existing parsing logic
+                                from tool_schemas import parse_tool_calls_from_response
+                                from response_normaliser import normalise_assistant_tool_response
+                                
+                                # Parse tool calls from the XML content
+                                tool_calls = parse_tool_calls_from_response(response_content)
+                                
+                                if tool_calls and len(tool_calls) > 0:
+                                    logger.info(f"🔧 Converting {len(tool_calls)} XML tool calls to OpenAI format for n8n compatibility")
+                                    
+                                    # Tool calls are already in OpenAI format from parsing
+                                    openai_tool_calls = tool_calls
+                                    
+                                    # Apply normalization to set proper schema
+                                    if openai_tool_calls:
+                                        normalized_message = normalise_assistant_tool_response(
+                                            message, openai_tool_calls, "tool_calls"
+                                        )
+                                        
+                                        # Update the response with converted tool calls
+                                        openai_response['choices'][0]['message'] = normalized_message
+                                        openai_response['choices'][0]['finish_reason'] = "tool_calls"
+                                        
+                                        logger.info(f"✅ Successfully converted XML to OpenAI tool_calls format")
+                                    
+                            except Exception as e:
+                                logger.error(f"❌ Failed to convert XML tool calls to OpenAI format: {e}")
+                                # Continue with original response if conversion fails
+                        
                     # SAFE RESPONSE: Ensure content is never null
                     if openai_response.get('choices') and len(openai_response['choices']) > 0:
                         message = openai_response['choices'][0].get('message', {})
@@ -813,6 +910,12 @@ async def chat_completions():
                 else:
                     # Use async formatter for proper OpenAI-compatible response
                     openai_response = await format_openai_response_async(response, model)
+                    
+                    # TOOL BEHAVIOUR COMPATIBILITY: Standard chat may also need normalization for consistency
+                    # (This ensures all responses follow the same format regardless of tool usage)
+                    if not is_openai_native:
+                        openai_response = model_router.normalize_tool_response(openai_response, model, None)
+                    
                     # SAFE RESPONSE: Ensure content is never null
                     if openai_response.get('choices') and len(openai_response['choices']) > 0:
                         message = openai_response['choices'][0].get('message', {})

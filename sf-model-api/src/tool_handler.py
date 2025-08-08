@@ -1048,7 +1048,7 @@ class ToolCallingHandler:
         tool_responses: List[Any],
         model: str
     ) -> Dict[str, Any]:
-        """Format response with tool calls."""
+        """Format response with tool calls using response normalizer."""
         
         # Build OpenAI-compatible response
         # SAFE RESPONSE: Only include tool_calls if there are valid calls, never empty arrays
@@ -1059,17 +1059,42 @@ class ToolCallingHandler:
         
         # Only add tool_calls if there are actual valid tool calls
         if tool_calls and len(tool_calls) > 0:
-            message["tool_calls"] = [
-                {
-                    "id": call.id,
-                    "type": "function",
-                    "function": {
-                        "name": call.function_name,
-                        "arguments": json.dumps(call.function_arguments)
+            openai_tool_calls = []
+            
+            for call in tool_calls:
+                try:
+                    # Use response normalizer for consistent formatting
+                    from response_normaliser import to_openai_tool_call
+                    
+                    openai_call = to_openai_tool_call(
+                        call.function_name,
+                        call.function_arguments,
+                        call.id
+                    )
+                    openai_tool_calls.append(openai_call)
+                    
+                except ImportError:
+                    # Fallback to legacy formatting
+                    openai_call = {
+                        "id": call.id,
+                        "type": "function",
+                        "function": {
+                            "name": call.function_name,
+                            "arguments": json.dumps(call.function_arguments)
+                        }
                     }
-                }
-                for call in tool_calls
-            ]
+                    openai_tool_calls.append(openai_call)
+            
+            message["tool_calls"] = openai_tool_calls
+            
+            # Apply response normalization for consistent behavior
+            try:
+                from response_normaliser import normalise_assistant_tool_response
+                message = normalise_assistant_tool_response(message, openai_tool_calls, "tool_calls")
+            except ImportError:
+                logger.warning("Response normaliser not available, using fallback tool response formatting")
+                # Fallback: ensure content is empty when tool calls are present
+                message["content"] = ""
         
         choice = {
             "index": 0,

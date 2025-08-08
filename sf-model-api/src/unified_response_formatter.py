@@ -369,7 +369,7 @@ class UnifiedResponseFormatter:
         # Determine finish reason based on response analysis
         finish_reason = self.determine_finish_reason(sf_response, generated_text, tool_calls)
         
-        # Build message object
+        # Build message object with response normalization
         message = {
             "role": "assistant",
             "content": generated_text
@@ -378,6 +378,17 @@ class UnifiedResponseFormatter:
         # Add tool_calls if present (OpenAI specification requirement)
         if tool_calls:
             message["tool_calls"] = tool_calls
+            
+            # Apply response normalization for tool calls
+            try:
+                from response_normaliser import normalise_assistant_tool_response
+                message = normalise_assistant_tool_response(message, tool_calls, finish_reason)
+                finish_reason = "tool_calls" if tool_calls else "stop"
+            except ImportError:
+                logger.warning("Response normaliser not available, using fallback tool call handling")
+                # Fallback: ensure content is empty when tool calls are present
+                if tool_calls:
+                    message["content"] = ""
         
         # Create OpenAI-compliant response structure
         openai_response = {
