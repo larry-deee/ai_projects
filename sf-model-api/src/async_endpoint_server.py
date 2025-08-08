@@ -762,6 +762,16 @@ async def generate_streaming_response(response: Dict[str, Any], request_start_ti
     async def stream_generator() -> AsyncGenerator[str, None]:
         content = extract_content_from_response(response)
         
+        # CRITICAL FIX: Handle None content to prevent TypeError: object of type 'NoneType' has no len()
+        if content is None:
+            logger.error("Content extraction returned None - likely timeout or response format issue")
+            content = "Error: Unable to extract response content. Please try again."
+        
+        # Ensure content is a string
+        if not isinstance(content, str):
+            logger.warning(f"Content is not string type: {type(content)}. Converting to string.")
+            content = str(content) if content else "Error: Invalid response format"
+        
         # Generate a unique ID for this streaming response
         stream_id = f"chatcmpl-{int(time.time())}{hash(str(response)) % 1000}"
         created_timestamp = int(time.time())
