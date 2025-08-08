@@ -61,6 +61,9 @@ from streaming_architecture import (
     get_anthropic_streaming_builder
 )
 
+# Import unified response formatter
+from unified_response_formatter import UnifiedResponseFormatter
+
 # Configure logging
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
@@ -76,6 +79,9 @@ _client_lock = asyncio.Lock()
 # Tool calling handler
 tool_calling_handler = None
 tool_calling_config = ToolCallingConfig()
+
+# Initialize unified response formatter
+formatter = UnifiedResponseFormatter()
 
 def async_with_token_refresh(func):
     """
@@ -369,8 +375,13 @@ async def list_models():
     
     except Exception as e:
         logger.error(f"Error listing models: {e}")
-        error_response = jsonify({"error": str(e)})
-        return add_n8n_compatible_headers(error_response), 500
+        error_response = formatter.format_error_response(
+            error=e,
+            error_type="service_error",
+            model="unknown"
+        )
+        json_response = jsonify(error_response)
+        return add_n8n_compatible_headers(json_response), 500
 
 @app.route('/v1/messages', methods=['POST'])
 @async_with_token_refresh
@@ -451,8 +462,13 @@ async def anthropic_messages():
                 user_messages.append(f"Assistant: {msg.get('content', '')}")
         
         if len(user_messages) == 0:
-            error_response = jsonify({"error": "No user messages found"})
-            return add_n8n_compatible_headers(error_response), 400
+            error_response = formatter.format_error_response(
+                error="No user messages found",
+                error_type="invalid_request",
+                model=model
+            )
+            json_response = jsonify(error_response)
+            return add_n8n_compatible_headers(json_response), 400
         
         final_prompt = user_messages[-1]
         
@@ -469,41 +485,25 @@ async def anthropic_messages():
             system_message=system_msg
         )
         
-        # Extract text for Anthropic format
-        generated_text = extract_content_from_response(sf_response)
-        if generated_text is None:
-            generated_text = "Error: Unable to extract response content"
-        
-        usage_info = extract_usage_info_async(sf_response)
-        
-        # Create message ID
-        message_id = f"msg_{int(time.time())}{hash(str(sf_response)) % 1000}"
-        
         if stream:
+            # For streaming, we still need the extracted text and usage for the streaming function
+            generated_text = extract_content_from_response(sf_response)
+            if generated_text is None:
+                generated_text = "Error: Unable to extract response content"
+            
+            usage_info = extract_usage_info_async(sf_response)
+            message_id = f"msg_{int(time.time())}{hash(str(sf_response)) % 1000}"
+            
             # Generate streaming response with proper Anthropic SSE format
             return await generate_anthropic_streaming_response(
                 generated_text, message_id, model, usage_info, request_start_time
             )
         else:
-            # Format as Anthropic response
-            anthropic_response = {
-                "id": message_id,
-                "type": "message",
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": generated_text
-                    }
-                ],
-                "model": model,
-                "stop_reason": "end_turn",
-                "stop_sequence": None,
-                "usage": {
-                    "input_tokens": usage_info.get("prompt_tokens", 0),
-                    "output_tokens": usage_info.get("completion_tokens", 0)
-                }
-            }
+            # UNIFIED: Use unified formatter for Anthropic response
+            anthropic_response = formatter.format_anthropic_response(
+                sf_response=sf_response,
+                model=model
+            )
             
             await track_request_performance(request_start_time)
             json_response = jsonify(anthropic_response)
@@ -511,8 +511,13 @@ async def anthropic_messages():
     
     except Exception as e:
         logger.error(f"Error in Anthropic messages endpoint: {e}")
-        error_response = jsonify({"error": str(e)})
-        return add_n8n_compatible_headers(error_response), 500
+        error_response = formatter.format_error_response(
+            error=e,
+            error_type="server_error",
+            model=model if 'model' in locals() else "claude-3-haiku"
+        )
+        json_response = jsonify(error_response)
+        return add_n8n_compatible_headers(json_response), 500
 
 async def generate_anthropic_streaming_response(
     generated_text: str, 
@@ -635,6 +640,12 @@ async def chat_completions():
         tools = data.get('tools', None)
         tool_choice = data.get('tool_choice', None)
         
+        # OPTIMIZATION: Default non-stream for tool calls (improves local usage stability)
+        original_stream_requested = stream
+        if stream and tools:
+            logger.info(f"🔧 Stream downgraded: tools present, switching to non-stream for model {model}")
+            stream = False
+        
         # Note: Model name mapping is now handled inside the respective methods
         # to maintain architectural consistency
         
@@ -681,14 +692,16 @@ async def chat_completions():
                     await track_request_performance(request_start_time)
                     json_response = jsonify(response)
                     # CRITICAL FIX: Ensure n8n compatibility with proper headers
-                    return add_n8n_compatible_headers(json_response)
+                    proxy_latency = (time.time() - request_start_time) * 1000
+                    return add_n8n_compatible_headers(json_response, stream_downgraded=original_stream_requested, proxy_latency_ms=proxy_latency)
                 else:
                     # Raw response needs formatting
                     openai_response = await format_openai_response_async(response, model)
                     await track_request_performance(request_start_time)
                     json_response = jsonify(openai_response)
-                    # CRITICAL FIX: Ensure n8n compatibility with proper headers
-                    return add_n8n_compatible_headers(json_response)
+                    # CRITICAL FIX: Ensure n8n compatibility with proper headers  
+                    proxy_latency = (time.time() - request_start_time) * 1000
+                    return add_n8n_compatible_headers(json_response, stream_downgraded=original_stream_requested, proxy_latency_ms=proxy_latency)
         
         else:
             # Standard chat completion without tools - FULLY ASYNC
@@ -719,7 +732,8 @@ async def chat_completions():
                     await track_request_performance(request_start_time)
                     json_response = jsonify(openai_response)
                     # CRITICAL FIX: Ensure n8n compatibility with proper headers
-                    return add_n8n_compatible_headers(json_response)
+                    proxy_latency = (time.time() - request_start_time) * 1000
+                    return add_n8n_compatible_headers(json_response, proxy_latency_ms=proxy_latency)
                     
             except Exception as e:
                 logger.error(f"Async chat completion failed: {e}")
@@ -761,9 +775,19 @@ async def generate_streaming_response(response: Dict[str, Any], request_start_ti
                 if isinstance(parameters, dict) and parameters.get('stop_reason') == 'tool_use':
                     has_tool_calls = True
         
+        # OPTIMIZATION: SSE heartbeat tracking for connection stability
+        last_heartbeat_time = time.time()
+        heartbeat_interval = 15.0  # 15 seconds
+        
         # Stream content in chunks
         chunk_size = 20
         for i in range(0, len(content), chunk_size):
+            # OPTIMIZATION: Inject SSE heartbeat if needed
+            current_time = time.time()
+            if current_time - last_heartbeat_time >= heartbeat_interval:
+                yield ":ka\n\n"  # SSE heartbeat to maintain connection
+                last_heartbeat_time = current_time
+            
             chunk = content[i:i + chunk_size]
             
             stream_chunk = {
@@ -1015,124 +1039,23 @@ async def async_generate_tool_calls(
 
 def extract_content_from_response(response: Dict[str, Any]) -> Optional[str]:
     """
-    ENHANCED: Extract text content from Salesforce API response supporting new generationDetails format.
+    UNIFIED: Extract text content from Salesforce API response using unified formatter.
     
-    Supports both legacy and new response formats:
-    - Legacy: {"generations": [{"text": "..."}]}
-    - New: {"generationDetails": {"generations": [{"content": "..."}]}}
+    This is a compatibility wrapper around the UnifiedResponseFormatter.extract_response_text()
+    method to maintain backward compatibility while standardizing response extraction logic.
     
     Returns:
         Optional[str]: Extracted text content, or None if extraction fails completely
     """
-    # CRITICAL FIX: Handle None response from timeout/error scenarios
-    if response is None:
-        logger.error("CRITICAL: extract_content_from_response received None response (likely timeout)")
-        return None
-    
-    # CRITICAL VALIDATION: Ensure response is a dictionary
-    if not isinstance(response, dict):
-        error_msg = f"CRITICAL: extract_content_from_response received {type(response).__name__} instead of dict"
-        logger.error(f"{error_msg}: {str(response)[:200]}")
-        
-        # If it's a string, it's likely an error message from the API
-        if isinstance(response, str):
-            logger.error(f"String response from API (likely error): {response[:500]}")
-            return f"API Error: {response[:200]}"
-        
-        # Return error string instead of raising exception to prevent crashes
-        return f"Response Type Error: Expected dict, got {type(response).__name__}"
-    
-    # CRITICAL FIX 4: Enhanced extraction prioritizing sync server format (generation.generatedText)
-    try:
-        # Path 1: SYNC SERVER FORMAT (highest priority) - generation.generatedText
-        if 'generation' in response and isinstance(response['generation'], dict):
-            generation = response['generation']
-            if 'generatedText' in generation:
-                text = generation['generatedText']
-                if isinstance(text, str) and text.strip():
-                    logger.info(f"✅ Extracted from sync server format: generation.generatedText")
-                    return text.strip()
-            elif 'text' in generation:
-                text = generation['text']
-                if isinstance(text, str) and text.strip():
-                    logger.info(f"✅ Extracted from generation.text fallback")
-                    return text.strip()
-        
-        # Path 2: Legacy Salesforce generations format
-        elif 'generations' in response and response['generations']:
-            generation = response['generations'][0]
-            if isinstance(generation, dict):
-                # Try 'text' field first (most common)
-                if 'text' in generation:
-                    text = generation['text']
-                    if isinstance(text, str) and text.strip():
-                        logger.info(f"✅ Extracted from legacy generations[0].text format")
-                        return text.strip()
-                # Try 'content' field as fallback
-                elif 'content' in generation:
-                    content = generation['content']
-                    if isinstance(content, str) and content.strip():
-                        logger.info(f"✅ Extracted from legacy generations[0].content format")
-                        return content.strip()
-        
-        # Path 3: NEW Salesforce generationDetails format (lower priority)
-        elif 'generationDetails' in response and isinstance(response['generationDetails'], dict):
-            generation_details = response['generationDetails']
-            if 'generations' in generation_details and generation_details['generations']:
-                generation = generation_details['generations'][0]
-                if isinstance(generation, dict) and 'content' in generation:
-                    content = generation['content']
-                    if isinstance(content, str) and content.strip():
-                        logger.info(f"✅ Extracted from new generationDetails format")
-                        return content.strip()
-        
-        # Path 4: OpenAI-style choices format
-        elif 'choices' in response and response['choices']:
-            choice = response['choices'][0]
-            if 'message' in choice:
-                logger.info(f"✅ Extracted from OpenAI-style choices format")
-                return choice['message'].get('content', '')
-            elif 'text' in choice:
-                logger.info(f"✅ Extracted from choices[0].text format")
-                return choice.get('text', '')
-        
-        # Path 5: Direct text/content fields
-        elif 'text' in response:
-            text_content = response['text']
-            if text_content is not None:
-                logger.info(f"✅ Extracted from direct text field")
-                return str(text_content)
-        elif 'content' in response:
-            content_field = response['content']
-            if content_field is not None:
-                logger.info(f"✅ Extracted from direct content field")
-                return str(content_field)
-        
-        # Path 6: Error response handling
-        elif 'error' in response:
-            error_info = response['error']
-            if isinstance(error_info, dict):
-                return f"API Error: {error_info.get('message', str(error_info))}"
-            else:
-                return f"API Error: {str(error_info)}"
-        
-        # CRITICAL FIX: Return None instead of string conversion for empty responses
-        # This allows calling functions to handle None appropriately
-        else:
-            logger.warning(f"No extractable content found in response structure: {list(response.keys())}")
-            return None
-    
-    except (KeyError, IndexError, TypeError) as e:
-        logger.error(f"Error extracting content from response: {e}")
-        logger.error(f"Response structure: {list(response.keys()) if isinstance(response, dict) else type(response)}")
-        return f"Content extraction error: {str(e)}"
+    extraction_result = formatter.extract_response_text(response)
+    return extraction_result.text
 
 async def format_openai_response_async(sf_response: Dict[str, Any], model: str, is_streaming: bool = False) -> Dict[str, Any]:
     """
-    ASYNC VERSION: Convert Salesforce Models API response to OpenAI format.
+    UNIFIED: Convert Salesforce Models API response to OpenAI format using unified formatter.
     
-    Handles both regular completions and tool calling responses.
-    Supports new generationDetails format and legacy formats.
+    This is a compatibility wrapper around the UnifiedResponseFormatter.format_openai_response()
+    method to maintain backward compatibility while ensuring consistent response formatting.
     
     Args:
         sf_response: Raw Salesforce API response
@@ -1142,87 +1065,18 @@ async def format_openai_response_async(sf_response: Dict[str, Any], model: str, 
     Returns:
         Dict[str, Any]: OpenAI-compatible response format
     """
-    # Enable debug mode based on environment variable
-    debug_mode = os.getenv('SF_RESPONSE_DEBUG', 'false').lower() == 'true'
-    
-    # Debug logging to understand response structure
-    if debug_mode:
-        logger.debug(f"🔍 Salesforce response structure: {json.dumps(sf_response, indent=2, default=str)}")
-    
-    # Extract generated text using enhanced extraction
-    generated_text = extract_content_from_response(sf_response)
-    
-    # CRITICAL FIX: Handle None response from timeout/error scenarios
-    if generated_text is None:
-        logger.error("TIMEOUT/NULL RESPONSE: extract_content_from_response returned None - likely timeout")
-        generated_text = "Error: Request timed out or returned invalid response. Please try again with a shorter prompt."
-    
-    # Validate content quality
-    if not isinstance(generated_text, str):
-        logger.warning(f"Generated text is not a string: {type(generated_text)}. Converting to string.")
-        generated_text = str(generated_text) if generated_text else "Error: Invalid content type returned"
-    elif len(generated_text) > 100000:  # Prevent extremely long responses
-        logger.warning(f"Generated text extremely long ({len(generated_text)} chars). Truncating.")
-        generated_text = generated_text[:100000] + "\n\n[Response truncated due to excessive length]"
-    
-    # Extract usage information
-    usage = extract_usage_info_async(sf_response)
-    
-    # Determine finish reason
-    finish_reason = "stop"
-    if 'generationDetails' in sf_response:
-        generation_details = sf_response['generationDetails']
-        if isinstance(generation_details, dict) and 'parameters' in generation_details:
-            parameters = generation_details['parameters']
-            if isinstance(parameters, dict) and 'stop_reason' in parameters:
-                stop_reason = parameters['stop_reason']
-                if stop_reason == 'tool_use':
-                    finish_reason = "tool_calls"
-    
-    # Check for tool calls in the response
-    tool_calls = []
-    if finish_reason == "tool_calls":
-        # Try to extract tool calls from different possible locations
-        if "tool_calls" in sf_response:
-            tool_calls = sf_response["tool_calls"]
-        elif "choices" in sf_response and sf_response["choices"] and "message" in sf_response["choices"][0]:
-            message = sf_response["choices"][0]["message"]
-            if "tool_calls" in message:
-                tool_calls = message["tool_calls"]
-    
-    # Create OpenAI-compatible response
-    openai_response = {
-        "id": f"chatcmpl-{int(time.time())}{hash(str(sf_response)) % 1000}",
-        "object": "chat.completion",
-        "created": int(time.time()),
-        "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": generated_text
-                },
-                "finish_reason": finish_reason
-            }
-        ],
-        "usage": usage
-    }
-    
-    # Add tool_calls to message if present
-    if tool_calls:
-        openai_response["choices"][0]["message"]["tool_calls"] = tool_calls
-    
-    if debug_mode:
-        logger.debug(f"✅ Formatted OpenAI response: {json.dumps(openai_response, indent=2, default=str)}")
-    
-    return openai_response
+    return formatter.format_openai_response(
+        sf_response=sf_response,
+        model=model,
+        is_streaming=is_streaming
+    )
 
 def extract_usage_info_async(sf_response: Dict[str, Any]) -> Dict[str, int]:
     """
-    ASYNC VERSION: Extract usage information from Salesforce response.
+    UNIFIED: Extract usage information from Salesforce response using unified formatter.
     
-    Supports both legacy and new generationDetails format.
+    This is a compatibility wrapper around the UnifiedResponseFormatter.extract_usage_info()
+    method to maintain backward compatibility while standardizing usage extraction logic.
     
     Args:
         sf_response: Raw Salesforce API response
@@ -1230,66 +1084,12 @@ def extract_usage_info_async(sf_response: Dict[str, Any]) -> Dict[str, int]:
     Returns:
         Dict[str, int]: OpenAI-compatible usage information
     """
-    usage = {
-        "prompt_tokens": 0,
-        "completion_tokens": 0,
-        "total_tokens": 0
+    usage_info = formatter.extract_usage_info(sf_response)
+    return {
+        "prompt_tokens": usage_info.prompt_tokens,
+        "completion_tokens": usage_info.completion_tokens,
+        "total_tokens": usage_info.total_tokens
     }
-    
-    try:
-        # Path 1: NEW generationDetails format
-        if 'generationDetails' in sf_response:
-            generation_details = sf_response['generationDetails']
-            if isinstance(generation_details, dict) and 'parameters' in generation_details:
-                parameters = generation_details['parameters']
-                if isinstance(parameters, dict) and 'usage' in parameters:
-                    sf_usage = parameters['usage']
-                    if isinstance(sf_usage, dict):
-                        usage.update({
-                            "prompt_tokens": sf_usage.get('inputTokenCount', 0),
-                            "completion_tokens": sf_usage.get('outputTokenCount', sf_usage.get('totalTokenCount', 0) - sf_usage.get('inputTokenCount', 0)),
-                            "total_tokens": sf_usage.get('totalTokenCount', 0)
-                        })
-                        return usage
-        
-        # Path 2: Legacy parameters format
-        if 'parameters' in sf_response and isinstance(sf_response['parameters'], dict):
-            parameters = sf_response['parameters']
-            if 'usage' in parameters and isinstance(parameters['usage'], dict):
-                sf_usage = parameters['usage']
-                usage.update({
-                    "prompt_tokens": sf_usage.get('inputTokenCount', 0),
-                    "completion_tokens": sf_usage.get('outputTokenCount', 0),
-                    "total_tokens": sf_usage.get('totalTokenCount', 0)
-                })
-                return usage
-        
-        # Path 3: Direct usage in response
-        if 'usage' in sf_response and isinstance(sf_response['usage'], dict):
-            sf_usage = sf_response['usage']
-            usage.update({
-                "prompt_tokens": sf_usage.get('inputTokenCount', sf_usage.get('input_tokens', 0)),
-                "completion_tokens": sf_usage.get('outputTokenCount', sf_usage.get('output_tokens', 0)),
-                "total_tokens": sf_usage.get('totalTokenCount', sf_usage.get('total_tokens', 0))
-            })
-            return usage
-        
-    except (KeyError, TypeError) as e:
-        logger.warning(f"Error extracting usage info: {e}")
-    
-    # Fallback: estimate from content if no usage info found
-    try:
-        content = extract_content_from_response(sf_response)
-        estimated_tokens = estimate_tokens(content)
-        usage.update({
-            "prompt_tokens": 0,  # Can't estimate input without original messages
-            "completion_tokens": estimated_tokens,
-            "total_tokens": estimated_tokens
-        })
-    except Exception:
-        pass  # Use zeros if estimation fails
-    
-    return usage
 
 def estimate_tokens(text: str) -> int:
     """
@@ -1305,12 +1105,14 @@ def estimate_tokens(text: str) -> int:
         return 0
     return len(text.split()) + len(text) // 4
 
-def add_n8n_compatible_headers(response):
+def add_n8n_compatible_headers(response, stream_downgraded: bool = False, proxy_latency_ms: Optional[float] = None):
     """
     Add n8n-compatible headers to ensure proper content type validation.
     
     Args:
         response: Quart response object
+        stream_downgraded: Whether streaming was downgraded for optimization
+        proxy_latency_ms: Proxy latency in milliseconds for debugging
         
     Returns:
         Response object with n8n-compatible headers
@@ -1323,6 +1125,13 @@ def add_n8n_compatible_headers(response):
     response.headers['Access-Control-Allow-Origin'] = '*'
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
     response.headers['Access-Control-Allow-Methods'] = 'POST, GET, OPTIONS'
+    
+    # OPTIMIZATION: Add debug headers for local usage insights
+    if stream_downgraded:
+        response.headers['X-Stream-Downgraded'] = 'true'
+    if proxy_latency_ms is not None:
+        response.headers['X-Proxy-Latency-Ms'] = str(round(proxy_latency_ms, 2))
+    
     return response
 
 
