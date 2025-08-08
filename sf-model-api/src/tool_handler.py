@@ -12,6 +12,7 @@ specification and provides seamless integration with the Salesforce Models API.
 """
 
 import json
+import os
 import time
 import uuid
 from typing import Dict, Any, List, Optional, Union, Generator
@@ -30,12 +31,36 @@ from tool_schemas import (
     validate_tool_choice,
     format_function_definitions,
     parse_tool_calls_from_response,
-    validate_tool_arguments
+    validate_tool_arguments,
+    ToolCallingValidationError
 )
 
 from tool_executor import ToolExecutor
 
 logger = logging.getLogger(__name__)
+
+def has_valid_tools(tools: Optional[List[Dict[str, Any]]]) -> bool:
+    """
+    Utility function to validate if tools are valid for tool calling.
+    
+    Args:
+        tools: Tool definitions to validate
+        
+    Returns:
+        bool: True if tools are valid and should trigger tool calling mode
+    """
+    if not isinstance(tools, list) or len(tools) == 0:
+        return False
+    
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        if tool.get('type') == 'function':
+            function = tool.get('function', {})
+            if isinstance(function, dict) and function.get('name', '').strip():
+                return True
+    
+    return False
 
 
 class ToolCallingMode(Enum):
@@ -385,15 +410,20 @@ class ToolCallingHandler:
             return self._format_error_response(str(e), model)
     
     def _validate_and_parse_tools(self, tools: Optional[List[Dict[str, Any]]]) -> List[ToolDefinition]:
-        """Validate and parse tool definitions."""
+        """Validate and parse tool definitions with enhanced error reporting."""
         if not tools:
             return []
         
         try:
-            return validate_tool_definitions(tools)
+            validated_tools = validate_tool_definitions(tools)
+            logger.info(f"Successfully validated {len(validated_tools)} tool definitions")
+            return validated_tools
+        except ToolCallingValidationError as e:
+            logger.error(f"Tool validation failed: {e}")
+            raise ToolCallingValidationError(f"Tool validation failed: {e}")
         except Exception as e:
-            logger.error(f"Invalid tool definitions: {e}")
-            raise ValueError(f"Invalid tool definitions: {e}")
+            logger.error(f"Unexpected error validating tools: {e}")
+            raise ValueError(f"Tool validation error: {e}")
     
     def _validate_and_parse_tool_choice(self, tool_choice: Optional[Union[str, Dict[str, Any]]]) -> Optional[ToolChoice]:
         """Validate and parse tool choice."""
@@ -606,12 +636,29 @@ class ToolCallingHandler:
         
         return enhanced_content
     
-    def _generate_parameter_extraction_hints(self, content: str, tools: List[ToolDefinition]) -> str:
+    def _generate_parameter_extraction_hints(self, content: str, tools: List[Any]) -> str:
         """
-        OPTIMIZED: Generate parameter extraction hints using cached regex patterns.
-        Eliminates runtime regex compilation for better performance.
+        ENHANCED: Generate parameter extraction hints with support for both raw dicts and ToolDefinition objects.
+        OPTIMIZED: Uses cached regex patterns for better performance.
         """
         hints = []
+        
+        # Normalize tools to ensure they are ToolDefinition objects
+        normalized_tools = []
+        for tool in tools:
+            if isinstance(tool, dict):
+                try:
+                    # Convert dict to ToolDefinition using validation
+                    validated_tools = self._validate_and_parse_tools([tool])
+                    if validated_tools:
+                        normalized_tools.extend(validated_tools)
+                except Exception as e:
+                    logger.warning(f"Failed to validate tool dict in parameter extraction: {e}")
+                    continue
+            else:
+                normalized_tools.append(tool)
+        
+        tools = normalized_tools
         
         # OPTIMIZED: Use cached regex patterns for parameter extraction
         standard_pattern = self.get_cached_pattern('fromai_standard')
@@ -674,9 +721,29 @@ class ToolCallingHandler:
         
         return "\n".join(hints) if hints else ""
     
-    def _extract_automatic_parameters(self, content: str, tools: List[ToolDefinition]) -> Dict[str, str]:
-        """Extract automatic parameter values from user message and context."""
+    def _extract_automatic_parameters(self, content: str, tools: List[Any]) -> Dict[str, str]:
+        """
+        ENHANCED: Extract automatic parameter values from user message and context.
+        Supports both raw dicts and ToolDefinition objects.
+        """
         extracted_params = {}
+        
+        # Normalize tools to ensure they are ToolDefinition objects
+        normalized_tools = []
+        for tool in tools:
+            if isinstance(tool, dict):
+                try:
+                    # Convert dict to ToolDefinition using validation
+                    validated_tools = self._validate_and_parse_tools([tool])
+                    if validated_tools:
+                        normalized_tools.extend(validated_tools)
+                except Exception as e:
+                    logger.warning(f"Failed to validate tool dict in parameter extraction: {e}")
+                    continue
+            else:
+                normalized_tools.append(tool)
+        
+        tools = normalized_tools
         
         import re
         
@@ -884,7 +951,12 @@ class ToolCallingHandler:
                     function_args = call_dict.get('arguments', {})
                     
                     if not function_name:
-                        logger.warning("Tool call missing function name")
+                        # VERBOSE_TOOL_LOGS: Check if we should demote this warning to debug level
+                        verbose_tool_logs = os.environ.get('VERBOSE_TOOL_LOGS', '0') == '1'
+                        if verbose_tool_logs:
+                            logger.warning("Tool call missing function name")
+                        else:
+                            logger.debug("Tool call missing function name (set VERBOSE_TOOL_LOGS=1 for warnings)")
                         continue
                     
                     # Validate function exists in tools with case-insensitive matching
@@ -979,24 +1051,30 @@ class ToolCallingHandler:
         """Format response with tool calls."""
         
         # Build OpenAI-compatible response
+        # SAFE RESPONSE: Only include tool_calls if there are valid calls, never empty arrays
+        message = {
+            "role": "assistant",
+            "content": response_text or ""  # Ensure content is never null
+        }
+        
+        # Only add tool_calls if there are actual valid tool calls
+        if tool_calls and len(tool_calls) > 0:
+            message["tool_calls"] = [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.function_name,
+                        "arguments": json.dumps(call.function_arguments)
+                    }
+                }
+                for call in tool_calls
+            ]
+        
         choice = {
             "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": response_text,
-                "tool_calls": [
-                    {
-                        "id": call.id,
-                        "type": "function",
-                        "function": {
-                            "name": call.function_name,
-                            "arguments": json.dumps(call.function_arguments)
-                        }
-                    }
-                    for call in tool_calls
-                ]
-            },
-            "finish_reason": "tool_calls"
+            "message": message,
+            "finish_reason": "tool_calls" if tool_calls and len(tool_calls) > 0 else "stop"
         }
         
         response = {
@@ -1107,7 +1185,7 @@ class ToolCallingHandler:
                     "index": 0,
                     "message": {
                         "role": "assistant",
-                        "content": f"I encountered an error: {error_message}"
+                        "content": f"I encountered an error: {error_message}" if error_message else "An error occurred."
                     },
                     "finish_reason": "stop"
                 }

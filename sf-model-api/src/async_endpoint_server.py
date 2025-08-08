@@ -347,6 +347,8 @@ async def list_models():
     """
     List available models endpoint - fully async implementation.
     """
+    request_start_time = time.time()
+    
     try:
         resolved_config_file = await resolve_config_path('config.json')
         client = await get_async_client(config_file=resolved_config_file)
@@ -371,7 +373,8 @@ async def list_models():
             "object": "list",
             "data": all_models
         })
-        return add_n8n_compatible_headers(response)
+        proxy_latency = (time.time() - request_start_time) * 1000
+        return add_n8n_compatible_headers(response, proxy_latency_ms=proxy_latency)
     
     except Exception as e:
         logger.error(f"Error listing models: {e}")
@@ -381,7 +384,8 @@ async def list_models():
             model="unknown"
         )
         json_response = jsonify(error_response)
-        return add_n8n_compatible_headers(json_response), 500
+        proxy_latency = (time.time() - request_start_time) * 1000
+        return add_n8n_compatible_headers(json_response, proxy_latency_ms=proxy_latency), 500
 
 @app.route('/v1/messages', methods=['POST'])
 @async_with_token_refresh
@@ -417,11 +421,13 @@ async def anthropic_messages():
             except ToolCallingValidationError as e:
                 error_response, status_code = create_tool_validation_error_response([str(e)])
                 json_response = jsonify(error_response)
-                return add_n8n_compatible_headers(json_response), status_code
+                proxy_latency = (time.time() - request_start_time) * 1000
+                return add_n8n_compatible_headers(json_response, proxy_latency_ms=proxy_latency), status_code
             except Exception as e:
                 error_response, status_code = parse_tool_error_response(e)
                 json_response = jsonify(error_response)
-                return add_n8n_compatible_headers(json_response), status_code
+                proxy_latency = (time.time() - request_start_time) * 1000
+                return add_n8n_compatible_headers(json_response, proxy_latency_ms=proxy_latency), status_code
         
         # Convert Anthropic messages format to internal format
         openai_messages = []
@@ -468,7 +474,8 @@ async def anthropic_messages():
                 model=model
             )
             json_response = jsonify(error_response)
-            return add_n8n_compatible_headers(json_response), 400
+            proxy_latency = (time.time() - request_start_time) * 1000
+            return add_n8n_compatible_headers(json_response, proxy_latency_ms=proxy_latency), 400
         
         final_prompt = user_messages[-1]
         
@@ -517,7 +524,8 @@ async def anthropic_messages():
             model=model if 'model' in locals() else "claude-3-haiku"
         )
         json_response = jsonify(error_response)
-        return add_n8n_compatible_headers(json_response), 500
+        proxy_latency = (time.time() - request_start_time) * 1000
+        return add_n8n_compatible_headers(json_response, proxy_latency_ms=proxy_latency), 500
 
 async def generate_anthropic_streaming_response(
     generated_text: str, 
@@ -588,6 +596,30 @@ async def generate_anthropic_streaming_response(
         }
     )
 
+def _has_valid_tools(tools: Optional[List[Dict[str, Any]]]) -> bool:
+    """
+    Strict tool validation helper - only return True if tools is a valid list with at least one element
+    having type=="function" and non-empty function.name.
+    
+    Args:
+        tools: Tool definitions to validate
+        
+    Returns:
+        bool: True if tools are valid and should trigger tool calling mode
+    """
+    if not isinstance(tools, list) or len(tools) == 0:
+        return False
+    
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        if tool.get('type') == 'function':
+            function = tool.get('function', {})
+            if isinstance(function, dict) and function.get('name', '').strip():
+                return True
+    
+    return False
+
 @app.route('/v1/chat/completions', methods=['POST', 'GET'])
 async def chat_completions():
     """
@@ -597,6 +629,7 @@ async def chat_completions():
     - Eliminates sync wrapper patterns (40-60% improvement)
     - Uses connection pool directly in async context
     - True async/await throughout request lifecycle
+    - N8N COMPATIBILITY: Implements strict tool gating and safe fallbacks
     """
     request_start_time = time.time()
     
@@ -640,8 +673,29 @@ async def chat_completions():
         tools = data.get('tools', None)
         tool_choice = data.get('tool_choice', None)
         
-        # OPTIMIZATION: Default non-stream for tool calls (improves local usage stability)
+        # CRITICAL FIX: Capture original stream request BEFORE any modifications
         original_stream_requested = stream
+        
+        # N8N COMPATIBILITY: Detect n8n caller and force non-tool behavior
+        user_agent = request.headers.get('User-Agent', '').lower()
+        n8n_compat_env = os.environ.get('N8N_COMPAT_MODE', '1') == '1'  # Default enabled
+        n8n_detected = 'n8n' in user_agent and n8n_compat_env
+        
+        # DEBUG: Temporary logging for n8n detection
+        logger.warning(f"🔍 DEBUG ALL REQUESTS: UA='{user_agent}', has_n8n={'n8n' in user_agent}, compat_env={n8n_compat_env}, detected={n8n_detected}")
+        if 'n8n' in user_agent:
+            logger.warning(f"🔍 DEBUG: n8n User-Agent detected: {user_agent[:50]}, compat_env: {n8n_compat_env}, detected: {n8n_detected}")
+        
+        if n8n_detected:
+            if tools or tool_choice:
+                logger.warning(f"🔧 N8N compatibility mode: ignoring tools and forcing non-tool behavior (UA: {user_agent[:50]}, ENV: {n8n_compat_env})")
+            tools = None  # Force ignore incoming tools
+            tool_choice = "none"  # Force disable tool choice
+            if stream:
+                logger.warning(f"🔧 N8N compatibility mode: downgrading streaming to non-streaming")
+                stream = False  # Downgrade streaming for n8n compatibility
+        
+        # OPTIMIZATION: Default non-stream for tool calls (improves local usage stability)
         if stream and tools:
             logger.info(f"🔧 Stream downgraded: tools present, switching to non-stream for model {model}")
             stream = False
@@ -653,8 +707,15 @@ async def chat_completions():
         async_performance_metrics['requests_processed'] += 1
         async_performance_metrics['sync_wrapper_eliminations'] += 1
         
-        # Check if tool calling is requested
-        if tools and tool_calling_handler:
+        # STRICT TOOL ENTRY CONDITIONS: Only enter tool path if tools are valid and tool_choice allows it
+        has_valid_tools = _has_valid_tools(tools)
+        tool_choice_allows = (
+            tool_choice is None or  # Default allows tools
+            (isinstance(tool_choice, str) and tool_choice.lower() not in ['none', 'disabled']) or
+            (isinstance(tool_choice, dict) and tool_choice.get('type', '').lower() not in ['none', 'disabled'])
+        )
+        
+        if has_valid_tools and tool_choice_allows and tool_calling_handler:
             logger.info(f"Processing async request with tool calling - Model: {model}, Tools: {len(tools)}")
             
             # CRITICAL FIX: Add strict OpenAI tool validation
@@ -664,11 +725,13 @@ async def chat_completions():
             except ToolCallingValidationError as e:
                 error_response, status_code = create_tool_validation_error_response([str(e)])
                 json_response = jsonify(error_response)
-                return add_n8n_compatible_headers(json_response), status_code
+                proxy_latency = (time.time() - request_start_time) * 1000
+                return add_n8n_compatible_headers(json_response, proxy_latency_ms=proxy_latency), status_code
             except Exception as e:
                 error_response, status_code = parse_tool_error_response(e)
                 json_response = jsonify(error_response)
-                return add_n8n_compatible_headers(json_response), status_code
+                proxy_latency = (time.time() - request_start_time) * 1000
+                return add_n8n_compatible_headers(json_response, proxy_latency_ms=proxy_latency), status_code
             
             # Use async implementation for tool handling to prevent "str can't be used in 'await'" error
             response = await async_process_tool_request(
@@ -689,25 +752,38 @@ async def chat_completions():
                 # Check if it's already in OpenAI format or needs formatting
                 if isinstance(response, dict) and "choices" in response and "object" in response:
                     # Already formatted OpenAI response from tool handler
+                    # SAFE RESPONSE: Ensure content is never null
+                    if response.get('choices') and len(response['choices']) > 0:
+                        message = response['choices'][0].get('message', {})
+                        if message.get('content') is None:
+                            message['content'] = ""
+                    
                     await track_request_performance(request_start_time)
                     json_response = jsonify(response)
                     # CRITICAL FIX: Ensure n8n compatibility with proper headers
                     proxy_latency = (time.time() - request_start_time) * 1000
-                    return add_n8n_compatible_headers(json_response, stream_downgraded=original_stream_requested, proxy_latency_ms=proxy_latency)
+                    return add_n8n_compatible_headers(json_response, stream_downgraded=(original_stream_requested and tools), proxy_latency_ms=proxy_latency)
                 else:
                     # Raw response needs formatting
                     openai_response = await format_openai_response_async(response, model)
+                    # SAFE RESPONSE: Ensure content is never null
+                    if openai_response.get('choices') and len(openai_response['choices']) > 0:
+                        message = openai_response['choices'][0].get('message', {})
+                        if message.get('content') is None:
+                            message['content'] = ""
+                    
                     await track_request_performance(request_start_time)
                     json_response = jsonify(openai_response)
                     # CRITICAL FIX: Ensure n8n compatibility with proper headers  
                     proxy_latency = (time.time() - request_start_time) * 1000
-                    return add_n8n_compatible_headers(json_response, stream_downgraded=original_stream_requested, proxy_latency_ms=proxy_latency)
+                    return add_n8n_compatible_headers(json_response, stream_downgraded=(original_stream_requested and tools), proxy_latency_ms=proxy_latency)
         
         else:
             # Standard chat completion without tools - FULLY ASYNC
             if len(messages) == 0:
                 error_response = jsonify({"error": "No messages provided"})
-                return add_n8n_compatible_headers(error_response), 400
+                proxy_latency = (time.time() - request_start_time) * 1000
+                return add_n8n_compatible_headers(error_response, proxy_latency_ms=proxy_latency), 400
             
             # CRITICAL FIX 5: Map model name for standard chat completion too
             sf_model = map_model_name(model)
@@ -728,24 +804,34 @@ async def chat_completions():
                 else:
                     # Use async formatter for proper OpenAI-compatible response
                     openai_response = await format_openai_response_async(response, model)
+                    # SAFE RESPONSE: Ensure content is never null
+                    if openai_response.get('choices') and len(openai_response['choices']) > 0:
+                        message = openai_response['choices'][0].get('message', {})
+                        if message.get('content') is None:
+                            message['content'] = ""
                     
                     await track_request_performance(request_start_time)
                     json_response = jsonify(openai_response)
                     # CRITICAL FIX: Ensure n8n compatibility with proper headers
                     proxy_latency = (time.time() - request_start_time) * 1000
-                    return add_n8n_compatible_headers(json_response, proxy_latency_ms=proxy_latency)
+                    return add_n8n_compatible_headers(json_response, stream_downgraded=(original_stream_requested and n8n_detected), proxy_latency_ms=proxy_latency)
                     
             except Exception as e:
                 logger.error(f"Async chat completion failed: {e}")
                 error_response = jsonify({"error": f"Chat completion failed: {str(e)}"})
                 # CRITICAL FIX: Ensure error responses also have proper n8n headers
-                return add_n8n_compatible_headers(error_response), 500
+                proxy_latency = (time.time() - request_start_time) * 1000
+                return add_n8n_compatible_headers(error_response, stream_downgraded=(original_stream_requested and n8n_detected), proxy_latency_ms=proxy_latency), 500
     
     except Exception as e:
         logger.error(f"Chat completions endpoint error: {e}")
         error_response = jsonify({"error": str(e)})
         # CRITICAL FIX: Ensure error responses also have proper n8n headers
-        return add_n8n_compatible_headers(error_response), 500
+        proxy_latency = (time.time() - request_start_time) * 1000
+        # Use local variables if available, otherwise default values
+        n8n_detected_fallback = 'n8n' in request.headers.get('User-Agent', '').lower() if 'request' in locals() else False
+        original_stream_fallback = False  # Conservative default for error cases
+        return add_n8n_compatible_headers(error_response, stream_downgraded=(original_stream_fallback and n8n_detected_fallback), proxy_latency_ms=proxy_latency), 500
 
 async def generate_streaming_response(response: Dict[str, Any], request_start_time: float, model: str = "claude-3-haiku") -> Response:
     """
@@ -1119,6 +1205,10 @@ def add_n8n_compatible_headers(response, stream_downgraded: bool = False, proxy_
     """
     Add n8n-compatible headers to ensure proper content type validation.
     
+    PERFORMANCE OPTIMIZATION: Consistently adds diagnostic headers for monitoring:
+    - x-proxy-latency-ms: Request processing latency (integer milliseconds)
+    - x-stream-downgraded: Whether streaming was downgraded ('true'/'false')
+    
     Args:
         response: Quart response object
         stream_downgraded: Whether streaming was downgraded for optimization
@@ -1136,11 +1226,15 @@ def add_n8n_compatible_headers(response, stream_downgraded: bool = False, proxy_
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
     response.headers['Access-Control-Allow-Methods'] = 'POST, GET, OPTIONS'
     
-    # OPTIMIZATION: Add debug headers for local usage insights
-    if stream_downgraded:
-        response.headers['X-Stream-Downgraded'] = 'true'
+    # PERFORMANCE DIAGNOSTICS: Always add diagnostic headers for consistency
+    response.headers['x-stream-downgraded'] = 'true' if stream_downgraded else 'false'
+    
+    # Add proxy latency header (integer milliseconds for consistency)
     if proxy_latency_ms is not None:
-        response.headers['X-Proxy-Latency-Ms'] = str(round(proxy_latency_ms, 2))
+        response.headers['x-proxy-latency-ms'] = str(int(proxy_latency_ms))
+    else:
+        # Default to 0 if not provided for consistent header presence
+        response.headers['x-proxy-latency-ms'] = '0'
     
     return response
 
@@ -1183,6 +1277,8 @@ async def get_performance_metrics():
     """
     Get async optimization performance metrics.
     """
+    request_start_time = time.time()
+    
     try:
         pool = get_connection_pool()
         pool_stats = pool.get_stats()
@@ -1202,18 +1298,22 @@ async def get_performance_metrics():
             "connection_pool": pool_stats,
             "optimization_status": "ACTIVE - Sync wrappers eliminated, connection pool integrated"
         })
-        return add_n8n_compatible_headers(metrics_response)
+        proxy_latency = (time.time() - request_start_time) * 1000
+        return add_n8n_compatible_headers(metrics_response, proxy_latency_ms=proxy_latency)
     
     except Exception as e:
         logger.error(f"Error getting performance metrics: {e}")
         error_response = jsonify({"error": str(e)})
-        return add_n8n_compatible_headers(error_response), 500
+        proxy_latency = (time.time() - request_start_time) * 1000
+        return add_n8n_compatible_headers(error_response, proxy_latency_ms=proxy_latency), 500
 
 @app.route('/health', methods=['GET'])
 async def health_check():
     """
     Async health check endpoint.
     """
+    request_start_time = time.time()
+    
     try:
         # Check for config.json with robust path resolution
         resolved_config_file = await resolve_config_path('config.json')
@@ -1232,7 +1332,8 @@ async def health_check():
                     "error": f"Missing required environment variables: {missing_vars_str} and no config.json found",
                     "timestamp": time.time()
                 })
-                return add_n8n_compatible_headers(error_response), 500
+                proxy_latency = (time.time() - request_start_time) * 1000
+                return add_n8n_compatible_headers(error_response, proxy_latency_ms=proxy_latency), 500
             
         # Try to get client and validate configuration
         client = await get_async_client(config_file=resolved_config_file)
@@ -1250,7 +1351,8 @@ async def health_check():
             "configuration_source": config_source,
             "timestamp": time.time()
         })
-        return add_n8n_compatible_headers(health_response)
+        proxy_latency = (time.time() - request_start_time) * 1000
+        return add_n8n_compatible_headers(health_response, proxy_latency_ms=proxy_latency)
     
     except Exception as e:
         error_response = jsonify({
@@ -1258,7 +1360,8 @@ async def health_check():
             "error": str(e),
             "timestamp": time.time()
         })
-        return add_n8n_compatible_headers(error_response), 500
+        proxy_latency = (time.time() - request_start_time) * 1000
+        return add_n8n_compatible_headers(error_response, proxy_latency_ms=proxy_latency), 500
 
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully."""

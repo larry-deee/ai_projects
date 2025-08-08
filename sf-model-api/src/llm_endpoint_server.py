@@ -1891,29 +1891,113 @@ def anthropic_messages():
         }
         
         if stream:
-            # For streaming, convert to Anthropic SSE format
+            # Generate Anthropic-compatible SSE streaming response
             def anthropic_stream():
-                yield f"event: message_start\n"
-                yield f"data: {json.dumps({'type': 'message_start', 'message': anthropic_response})}\n\n"
-                
-                # Stream content
-                words = generated_text.split()
-                for i, word in enumerate(words):
-                    delta = {
-                        "type": "content_block_delta",
-                        "index": 0,
-                        "delta": {
-                            "type": "text_delta",
-                            "text": word + (" " if i < len(words) - 1 else "")
+                try:
+                    # Message start event with complete message structure
+                    message_start_data = {
+                        "type": "message_start",
+                        "message": {
+                            "id": anthropic_response["id"],
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [],
+                            "model": anthropic_response["model"],
+                            "stop_reason": None,
+                            "stop_sequence": None,
+                            "usage": {
+                                "input_tokens": anthropic_response["usage"]["input_tokens"],
+                                "output_tokens": 0  # Will be updated in final event
+                            }
                         }
                     }
-                    yield f"event: content_block_delta\n"
-                    yield f"data: {json.dumps(delta)}\n\n"
-                    time.sleep(0.05)
-                
-                # End stream
-                yield f"event: message_stop\n"
-                yield f"data: {json.dumps({'type': 'message_stop'})}\n\n"
+                    
+                    yield f"event: message_start\n"
+                    yield f"data: {json.dumps(message_start_data)}\n\n"
+                    
+                    # Content block start event
+                    content_block_start_data = {
+                        "type": "content_block_start",
+                        "index": 0,
+                        "content_block": {
+                            "type": "text",
+                            "text": ""
+                        }
+                    }
+                    
+                    yield f"event: content_block_start\n"
+                    yield f"data: {json.dumps(content_block_start_data)}\n\n"
+                    
+                    # Stream content in chunks with content_block_delta events
+                    chunk_size = 5  # Small chunks for smooth streaming
+                    words = generated_text.split()
+                    
+                    for i in range(0, len(words), chunk_size):
+                        chunk_words = words[i:i + chunk_size]
+                        chunk_text = " ".join(chunk_words)
+                        
+                        # Add space if not the last chunk
+                        if i + chunk_size < len(words):
+                            chunk_text += " "
+                        
+                        content_block_delta_data = {
+                            "type": "content_block_delta",
+                            "index": 0,
+                            "delta": {
+                                "type": "text_delta",
+                                "text": chunk_text
+                            }
+                        }
+                        
+                        yield f"event: content_block_delta\n"
+                        yield f"data: {json.dumps(content_block_delta_data)}\n\n"
+                        
+                        time.sleep(0.03)  # Small delay for streaming effect
+                    
+                    # Content block stop event
+                    content_block_stop_data = {
+                        "type": "content_block_stop",
+                        "index": 0
+                    }
+                    
+                    yield f"event: content_block_stop\n"
+                    yield f"data: {json.dumps(content_block_stop_data)}\n\n"
+                    
+                    # Message delta event with final usage
+                    message_delta_data = {
+                        "type": "message_delta",
+                        "delta": {
+                            "stop_reason": "end_turn",
+                            "stop_sequence": None
+                        },
+                        "usage": {
+                            "output_tokens": anthropic_response["usage"]["output_tokens"]
+                        }
+                    }
+                    
+                    yield f"event: message_delta\n"
+                    yield f"data: {json.dumps(message_delta_data)}\n\n"
+                    
+                    # Message stop event
+                    message_stop_data = {
+                        "type": "message_stop"
+                    }
+                    
+                    yield f"event: message_stop\n"
+                    yield f"data: {json.dumps(message_stop_data)}\n\n"
+                    
+                except Exception as e:
+                    logger.error(f"Error in Anthropic streaming: {e}")
+                    # Send error event
+                    error_data = {
+                        "type": "error",
+                        "error": {
+                            "type": "api_error",
+                            "message": str(e)
+                        }
+                    }
+                    yield f"event: error\n"
+                    yield f"data: {json.dumps(error_data)}\n\n"
             
             safe_generator = create_streaming_response_with_disconnect_detection(
                 anthropic_stream(), anthropic_response.get('id', 'unknown')
@@ -1921,12 +2005,14 @@ def anthropic_messages():
             
             return Response(
                 safe_generator,
-                mimetype='text/event-stream',
+                mimetype='text/plain; charset=utf-8',  # Correct content type for SSE
                 headers={
                     'Cache-Control': 'no-cache',
                     'Connection': 'keep-alive',
                     'Access-Control-Allow-Origin': '*',
-                    'Transfer-Encoding': 'chunked'
+                    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+                    'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+                    'X-Accel-Buffering': 'no'
                 }
             )
         else:
