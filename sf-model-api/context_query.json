@@ -1,0 +1,7 @@
+{
+  "requesting_agent": "test-automator",
+  "request_type": "get_task_briefing",
+  "payload": {
+    "query": "Initial briefing required for test automation. Provide overview of testing framework, existing test coverage, quality gates, and relevant test files."
+  }
+}

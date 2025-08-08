@@ -50,6 +50,13 @@ from tool_schemas import (
 from tool_handler import ToolCallingHandler, ToolCallingMode
 from model_router import get_model_router, is_openai_native_model
 
+# Import new OpenAI Front-Door & Backend Adapters architecture
+from model_capabilities import caps_for, get_backend_type, supports_native_tools, requires_normalization
+from openai_spec_adapter import route_and_normalise, normalise_anthropic, normalise_gemini, normalise_generic
+
+# Import tool-call repair shim
+from openai_tool_fix import repair_openai_tool_calls, repair_openai_response
+
 # Import streaming architecture
 from streaming_architecture import (
     StreamingResponseBuilder,
@@ -320,6 +327,88 @@ def map_model_name(model: str) -> str:
     }
     
     return model_mapping.get(model, model)
+
+class ClientAdapter:
+    """
+    Client adapter for the OpenAI Front-Door & Backend Adapters architecture.
+    
+    Provides a unified interface that the route_and_normalise function expects,
+    wrapping the existing AsyncSalesforceModelsClient calls.
+    """
+    
+    def __init__(self, salesforce_client: AsyncSalesforceModelsClient):
+        self.sf_client = salesforce_client
+        
+    async def roundtrip(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Generic roundtrip method that handles OpenAI-format requests.
+        
+        Args:
+            payload: OpenAI-compatible request payload
+            
+        Returns:
+            Dict: Raw API response for normalization
+        """
+        model = payload.get('model', 'claude-3-haiku')
+        messages = payload.get('messages', [])
+        max_tokens = payload.get('max_tokens', 1000)
+        temperature = payload.get('temperature', 0.7)
+        tools = payload.get('tools', [])
+        
+        # Map to Salesforce model name
+        sf_model = map_model_name(model)
+        
+        try:
+            # Use chat completion for standard requests
+            if not tools:
+                return await async_with_token_refresh(self.sf_client._async_chat_completion)(
+                    messages=messages,
+                    model=sf_model,
+                    max_tokens=max_tokens,
+                    temperature=temperature
+                )
+            else:
+                # For tool calling, use the existing tool handler pattern
+                # This maintains compatibility with the current tool calling logic
+                if tool_calling_handler:
+                    return await async_process_tool_request(
+                        client=self.sf_client,
+                        messages=messages,
+                        tools=tools,
+                        tool_choice=payload.get('tool_choice'),
+                        model=model,  # Use original model name
+                        max_tokens=max_tokens,
+                        temperature=temperature
+                    )
+                else:
+                    # Fallback to direct chat completion
+                    return await async_with_token_refresh(self.sf_client._async_chat_completion)(
+                        messages=messages,
+                        model=sf_model,
+                        max_tokens=max_tokens,
+                        temperature=temperature
+                    )
+        except Exception as e:
+            logger.error(f"❌ ClientAdapter roundtrip failed for model {model}: {e}")
+            # Return error in a format that can be normalized
+            return {
+                "error": str(e),
+                "model": model,
+                "generations": [{"text": f"Error: {str(e)}"}]
+            }
+
+class MultiClientAdapter:
+    """
+    Multi-client adapter that provides backend-specific clients for route_and_normalise.
+    """
+    
+    def __init__(self, salesforce_client: AsyncSalesforceModelsClient):
+        self.generic = ClientAdapter(salesforce_client)
+        # For now, all backends use the same Salesforce client
+        # In the future, these could be separate client implementations
+        self.openai = self.generic
+        self.anthropic = self.generic  
+        self.gemini = self.generic
 
 @app.before_serving
 async def startup():
@@ -686,43 +775,65 @@ async def chat_completions():
         # CRITICAL FIX: Capture original stream request BEFORE any modifications
         original_stream_requested = stream
         
-        # N8N TOOL BEHAVIOUR COMPATIBILITY: Detect n8n caller and apply tool preservation logic
-        user_agent = request.headers.get('User-Agent', '').lower()
-        n8n_compat_env = os.environ.get('N8N_COMPAT_MODE', '1') == '1'  # Default enabled
-        n8n_detected = (('n8n' in user_agent) or user_agent.startswith('openai/js')) and n8n_compat_env
-        
-        # Tool preservation setting - allows preserving tools while disabling streaming
-        PRESERVE_TOOLS = os.getenv("N8N_COMPAT_PRESERVE_TOOLS", "1") == "1"
-        
-        # DEBUG: Temporary logging for n8n detection
-        logger.warning(f"🔍 DEBUG ALL REQUESTS: UA='{user_agent}', has_n8n={n8n_detected}, compat_env={n8n_compat_env}, detected={n8n_detected}")
-        if 'n8n' in user_agent:
-            logger.warning(f"🔍 DEBUG: n8n User-Agent detected: {user_agent[:50]}, compat_env: {n8n_compat_env}, detected: {n8n_detected}")
-        
-        if n8n_detected:
-            # NEW BEHAVIOR: Preserve tools but disable streaming for n8n compatibility
-            if stream:
-                logger.warning("🔧 N8N compat: streaming disabled (non-streaming).")
-                stream = False
-            if PRESERVE_TOOLS:
-                logger.warning("🔧 N8N compat: tools PRESERVED (tool_choice unchanged).")
-            else:
-                # Legacy behavior if PRESERVE_TOOLS=0
-                logger.warning("🔧 N8N compat: tools IGNORED (PRESERVE_TOOLS=0).")
-                tools = None
-                tool_choice = "none"
+        # UNIVERSAL TOOL PRESERVATION: Tools are always preserved regardless of User-Agent
+        # The tool-call repair shim ensures universal OpenAI v1 specification compliance
+        logger.debug(f"🔧 Universal OpenAI compatibility: tools={'preserved' if tools else 'none'}, model={model}")
         
         # OPTIMIZATION: Default non-stream for tool calls (improves local usage stability)
         if stream and tools:
             logger.info(f"🔧 Stream downgraded: tools present, switching to non-stream for model {model}")
             stream = False
         
-        # Note: Model name mapping is now handled inside the respective methods
-        # to maintain architectural consistency
-        
         # Track optimization metrics
         async_performance_metrics['requests_processed'] += 1
         async_performance_metrics['sync_wrapper_eliminations'] += 1
+        
+        # NEW ARCHITECTURE: OpenAI Front-Door & Backend Adapters with Tool-Call Repair
+        # Enable with OPENAI_FRONTDOOR_ENABLED=1 environment variable
+        # Includes universal tool-call repair shim for OpenAI v1 specification compliance
+        use_new_architecture = os.getenv("OPENAI_FRONTDOOR_ENABLED", "0") == "1"
+        
+        if use_new_architecture:
+            logger.info(f"🚀 Using new OpenAI Front-Door architecture for model: {model}")
+            try:
+                # Create payload for the new architecture
+                payload = {
+                    "messages": messages,
+                    "model": model,
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                    "tools": tools,
+                    "tool_choice": tool_choice,
+                    "stream": stream
+                }
+                
+                # Create client adapter and route the request
+                multi_client = MultiClientAdapter(client)
+                openai_response = await route_and_normalise(payload, multi_client)
+                
+                # TOOL-CALL REPAIR: Apply universal repair shim for OpenAI compliance
+                repaired_response, was_repaired = repair_openai_response(openai_response, tools)
+                if was_repaired:
+                    logger.debug("🔧 Tool calls repaired for OpenAI compliance via new architecture")
+                    openai_response = repaired_response
+                
+                # Handle streaming if requested
+                if stream:
+                    logger.info(f"🚀 Starting new architecture streaming for model: {model}")
+                    return await generate_streaming_response(openai_response, request_start_time, model)
+                else:
+                    # Return the normalized OpenAI response
+                    await track_request_performance(request_start_time)
+                    json_response = jsonify(openai_response)
+                    proxy_latency = (time.time() - request_start_time) * 1000
+                    return add_n8n_compatible_headers(json_response, stream_downgraded=(original_stream_requested and tools), proxy_latency_ms=proxy_latency)
+                    
+            except Exception as e:
+                logger.error(f"❌ New architecture failed for model {model}: {e}")
+                # Fall back to legacy architecture
+                logger.info("🔄 Falling back to legacy architecture")
+        
+        # LEGACY ARCHITECTURE: Continue with existing tool routing logic
         
         # TOOL BEHAVIOUR COMPATIBILITY LAYER: Enhanced tool routing with model-aware decisions
         model_router = get_model_router()
@@ -814,6 +925,12 @@ async def chat_completions():
                             except Exception as e:
                                 logger.error(f"❌ Failed to convert XML tool calls to OpenAI format (pre-formatted path): {e}")
                                 # Continue with original response if conversion fails
+                    
+                    # TOOL-CALL REPAIR: Apply universal repair shim for OpenAI compliance
+                    repaired_response, was_repaired = repair_openai_response(response, tools)
+                    if was_repaired:
+                        logger.debug("🔧 Tool calls repaired for OpenAI compliance via legacy path (pre-formatted)")
+                        response = repaired_response
                         
                     # SAFE RESPONSE: Ensure content is never null
                     if response.get('choices') and len(response['choices']) > 0:
@@ -871,6 +988,12 @@ async def chat_completions():
                             except Exception as e:
                                 logger.error(f"❌ Failed to convert XML tool calls to OpenAI format: {e}")
                                 # Continue with original response if conversion fails
+                    
+                    # TOOL-CALL REPAIR: Apply universal repair shim for OpenAI compliance
+                    repaired_response, was_repaired = repair_openai_response(openai_response, tools)
+                    if was_repaired:
+                        logger.debug("🔧 Tool calls repaired for OpenAI compliance via legacy path (raw response)")
+                        openai_response = repaired_response
                         
                     # SAFE RESPONSE: Ensure content is never null
                     if openai_response.get('choices') and len(openai_response['choices']) > 0:
@@ -916,6 +1039,12 @@ async def chat_completions():
                     if not is_openai_native:
                         openai_response = model_router.normalize_tool_response(openai_response, model, None)
                     
+                    # TOOL-CALL REPAIR: Apply universal repair shim for consistency (standard chat)
+                    repaired_response, was_repaired = repair_openai_response(openai_response, None)
+                    if was_repaired:
+                        logger.debug("🔧 Tool calls repaired for OpenAI compliance via standard chat path")
+                        openai_response = repaired_response
+                    
                     # SAFE RESPONSE: Ensure content is never null
                     if openai_response.get('choices') and len(openai_response['choices']) > 0:
                         message = openai_response['choices'][0].get('message', {})
@@ -926,14 +1055,14 @@ async def chat_completions():
                     json_response = jsonify(openai_response)
                     # CRITICAL FIX: Ensure n8n compatibility with proper headers
                     proxy_latency = (time.time() - request_start_time) * 1000
-                    return add_n8n_compatible_headers(json_response, stream_downgraded=(original_stream_requested and n8n_detected), proxy_latency_ms=proxy_latency)
+                    return add_n8n_compatible_headers(json_response, stream_downgraded=(original_stream_requested and tools), proxy_latency_ms=proxy_latency)
                     
             except Exception as e:
                 logger.error(f"Async chat completion failed: {e}")
                 error_response = jsonify({"error": f"Chat completion failed: {str(e)}"})
                 # CRITICAL FIX: Ensure error responses also have proper n8n headers
                 proxy_latency = (time.time() - request_start_time) * 1000
-                return add_n8n_compatible_headers(error_response, stream_downgraded=(original_stream_requested and n8n_detected), proxy_latency_ms=proxy_latency), 500
+                return add_n8n_compatible_headers(error_response, stream_downgraded=(original_stream_requested and tools), proxy_latency_ms=proxy_latency), 500
     
     except Exception as e:
         logger.error(f"Chat completions endpoint error: {e}")
@@ -941,9 +1070,8 @@ async def chat_completions():
         # CRITICAL FIX: Ensure error responses also have proper n8n headers
         proxy_latency = (time.time() - request_start_time) * 1000
         # Use local variables if available, otherwise default values
-        n8n_detected_fallback = 'n8n' in request.headers.get('User-Agent', '').lower() if 'request' in locals() else False
         original_stream_fallback = False  # Conservative default for error cases
-        return add_n8n_compatible_headers(error_response, stream_downgraded=(original_stream_fallback and n8n_detected_fallback), proxy_latency_ms=proxy_latency), 500
+        return add_n8n_compatible_headers(error_response, stream_downgraded=original_stream_fallback, proxy_latency_ms=proxy_latency), 500
 
 async def generate_streaming_response(response: Dict[str, Any], request_start_time: float, model: str = "claude-3-haiku") -> Response:
     """

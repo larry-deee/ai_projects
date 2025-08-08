@@ -1,12 +1,69 @@
 # API Compatibility & Integration Guide
 
+## OpenAI Front-Door & Backend Adapters
+
+The Salesforce Models API Gateway now implements the OpenAI Front-Door & Backend Adapters architecture, providing universal OpenAI v1 specification compliance across all model backends.
+
+### Architecture Overview
+
+The OpenAI Front-Door architecture transforms the gateway from UA-based tool filtering to universal OpenAI v1 specification compliance with intelligent backend adapters:
+
+- **OpenAI-Native Models**: Direct passthrough with optimal performance
+- **Anthropic Models**: Claude format → OpenAI tool_calls normalization
+- **Gemini Models**: Vertex AI format → OpenAI tool_calls normalization
+- **Tool-Call Repair**: Automatic fix for "Tool call missing function name" errors
+
+### Key Components
+
+#### 1. Model Capabilities Registry
+
+The `model_capabilities.py` module provides a centralized capability registry:
+
+```python
+from model_capabilities import caps_for, get_backend_type
+
+# Check capabilities of a model
+caps = caps_for("claude-3-sonnet")
+# Returns: {'openai_compatible': false, 'anthropic_bedrock': true, ...}
+
+# Get the backend type for routing
+backend = get_backend_type("gpt-4")
+# Returns: 'openai_native'
+```
+
+#### 2. Backend Adapters
+
+The system automatically routes requests to the appropriate backend adapter:
+
+```python
+# Configuration via environment variables
+export OPENAI_FRONTDOOR_ENABLED=1  # Enable the new architecture
+export MODEL_CAPABILITIES_JSON='{"my-custom-model": {"backend_type": "anthropic_bedrock"}}'
+```
+
+#### 3. Tool-Call Repair
+
+The tool-call repair shim ensures universal compatibility:
+
+- Fixes missing `function.name` fields using tool definitions
+- Ensures `function.arguments` are properly formatted as JSON strings
+- Handles malformed tool call structures gracefully
+
+### Universal Compatibility Benefits
+
+- All models now output consistent OpenAI v1 specification responses
+- Tools are preserved for all clients, regardless of User-Agent
+- Automatic tool-call repair prevents common errors
+- Direct passthrough for OpenAI-native models optimizes performance
+
 ## Table of Contents
-1. [n8n Integration & Behavior](#n8n-integration--behavior)
-2. [Claude Code Tool Calling & SSE](#claude-code-tool-calling--sse)
-3. [OpenAI API Compliance](#openai-api-compliance)
-4. [Response Format Standardization](#response-format-standardization)
-5. [Streaming Behavior & Headers](#streaming-behavior--headers)
-6. [Known Limitations & Workarounds](#known-limitations--workarounds)
+1. [OpenAI Front-Door & Backend Adapters](#openai-front-door--backend-adapters)
+2. [n8n Integration & Behavior](#n8n-integration--behavior)
+3. [Claude Code Tool Calling & SSE](#claude-code-tool-calling--sse)
+4. [OpenAI API Compliance](#openai-api-compliance)
+5. [Response Format Standardization](#response-format-standardization)
+6. [Streaming Behavior & Headers](#streaming-behavior--headers)
+7. [Known Limitations & Workarounds](#known-limitations--workarounds)
 
 ## n8n Integration & Behavior
 
@@ -14,7 +71,7 @@ The Salesforce Models API Gateway is designed for seamless integration with n8n 
 
 ### n8n Workflow Configuration
 
-n8n workflows can use the gateway with tool calling support through the HTTP Request node:
+n8n workflows can use the gateway with tool calling support for all models through the HTTP Request node:
 
 ```json
 {
@@ -23,10 +80,26 @@ n8n workflows can use the gateway with tool calling support through the HTTP Req
   "headers": {"Content-Type": "application/json"},
   "body": {
     "model": "claude-3-haiku",
-    "messages": [{"role": "user", "content": "Process this data"}]
+    "messages": [{"role": "user", "content": "Process this data"}],
+    "tools": [{
+      "type": "function",
+      "function": {
+        "name": "extract_data",
+        "description": "Extract structured data",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name": {"type": "string"},
+            "value": {"type": "number"}
+          }
+        }
+      }
+    }]
   }
 }
 ```
+
+With the new OpenAI Front-Door architecture, all models (including Anthropic's Claude) now work with tool calling in n8n, with consistent OpenAI v1-compatible tool_calls format.
 
 ### n8n Tool Calling with $fromAI()
 
@@ -189,7 +262,7 @@ for chunk in response:
 
 ## OpenAI API Compliance
 
-The Salesforce Models API Gateway implements full OpenAI API compatibility for seamless integration with existing OpenAI clients.
+The Salesforce Models API Gateway implements full OpenAI v1 specification compliance for all model backends, ensuring seamless integration with existing OpenAI clients.
 
 ### OpenAI-Compatible Endpoints
 
@@ -230,7 +303,7 @@ All responses follow the standard OpenAI format:
 
 ### Tool Calling Response Format
 
-Tool calling responses follow the OpenAI function calling specification:
+All model backends (OpenAI, Anthropic, Gemini) now return tool calling responses in the OpenAI v1 specification format:
 
 ```json
 {
@@ -265,6 +338,8 @@ Tool calling responses follow the OpenAI function calling specification:
   }
 }
 ```
+
+The tool-call repair shim ensures that all tool_calls have proper `function.name` fields and correctly formatted `function.arguments` as JSON strings.
 
 ### OpenAI Client Library Integration
 
@@ -422,6 +497,22 @@ The server adds debug headers for easier troubleshooting:
 These headers are automatically added to all responses in development mode.
 
 ## Known Limitations & Workarounds
+
+### Model-Specific Backend Adapters
+
+**Issue:** Different model backends use different response formats and tool calling patterns.
+
+**Solution:** The OpenAI Front-Door architecture now includes intelligent backend adapters:
+
+```python
+# Enable with environment variable
+export OPENAI_FRONTDOOR_ENABLED=1
+
+# Override model capabilities if needed
+export MODEL_CAPABILITIES_JSON='{"custom-model": {"backend_type": "anthropic_bedrock"}}'  
+```
+
+This configuration-driven approach allows for easy addition of new model backends without code changes.
 
 ### Tool Calling + Streaming Limitations
 

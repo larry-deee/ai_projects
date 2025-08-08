@@ -1,146 +1,77 @@
-# Fix: Pre-warm Token & Strict Tool-Call JSON Parsing for n8n/OpenAI-JS
+# OpenAI Front-Door & Backend Adapters Architecture
 
 ## Summary
+This PR transforms sf-model-api from UA-based tool filtering to universal OpenAI v1 specification compliance with intelligent backend adapters. It provides seamless tool calling support across all model providers (OpenAI, Anthropic, Gemini) while maintaining optimal performance through direct passthrough for OpenAI-native models.
 
-This PR implements critical fixes to eliminate first-request 401 authentication errors and harden tool-call JSON parsing for n8n and OpenAI-JS clients. The implementation includes OAuth token pre-warming at server startup and robust JSON parsing that handles code fences and prevents false positives.
+## Key Changes
+- 🎯 **Universal OpenAI Compatibility**: All responses now conform to OpenAI v1 specification
+- 🔧 **Backend Adapters**: Intelligent normalization for Anthropic/Gemini → OpenAI format
+- 🛠 **Tool-Call Repair**: Eliminates "Tool call missing function name" errors
+- ⚡ **Performance Optimized**: Direct passthrough for OpenAI-native models
+- 🔄 **Configuration-Driven**: Model capabilities via environment variables or files
+- 🧰 **n8n Integration**: Full tool calling support for all models in n8n workflows
 
-## Changes Made
+## Technical Implementation
 
-### 🔐 Token Pre-Warming Implementation
-- **Added**: OAuth token pre-warming in `@app.before_serving` startup hook
-- **Eliminates**: First-request 401 authentication failures
-- **Implementation**: Uses existing `AsyncClientManager.get_client()` with graceful error handling
-- **Logging**: Success/failure messages for monitoring and debugging
+### 1. Model Capabilities Registry (`src/model_capabilities.py`)
+- Centralized capability definition system for model routing
+- Environment variable and file-based configuration
+- Thread-safe lazy loading and caching
+- Default mappings for common models with intelligent fallback
 
-### 🌐 Enhanced n8n Compatibility  
-- **Extended**: User agent detection to include `openai/js` clients
-- **Maintains**: Existing `n8n` detection and `N8N_COMPAT_MODE` environment control
-- **Logic**: `n8n_detected = (('n8n' in user_agent) or user_agent.startswith('openai/js')) and n8n_compat_env`
+### 2. OpenAI Specification Adapter (`src/openai_spec_adapter.py`)
+- Universal backend adapter system for response normalization
+- Model-specific adapters for Anthropic, Gemini, and OpenAI
+- Preserves tools for all clients regardless of User-Agent
 
-### 🛠 Hardened JSON Tool-Call Parsing
-- **Added**: `_strip_code_fences()` function to remove ```json markdown wrappers
-- **Replaced**: Greedy `[` capture with strict JSON array regex pattern
-- **Pattern**: `r"\[\s*\{[\s\S]*?\}\s*(?:,\s*\{[\s\S]*?\}\s*)*\s*\]"` for accurate detection
-- **Applied**: Fence stripping in both main parsing and recovery paths
-- **Prevents**: False positives on narrative text containing brackets
+### 3. Tool-Call Repair (`src/openai_tool_fix.py`)
+- Fixes missing `function.name` fields using tool definitions
+- Ensures `function.arguments` are properly formatted
+- Handles malformed tool call structures gracefully
+- Thread-safe operations with performance optimizations
 
-### 📚 Documentation Updates
-- **Updated**: `README.md` with enhanced n8n compatibility information
-- **Enhanced**: `N8N_COMPATIBILITY.md` with technical implementation details
-- **Added**: Token pre-warming and `openai/js` client support documentation
+## Testing
+- ✅ **Backend Adapters**: All adapters validated (OpenAI, Anthropic, Gemini)
+- ✅ **Tool-Call Repair**: Prevents all function name errors
+- ✅ **Universal OpenAI Compliance**: All responses conform to OpenAI v1 spec
+- ✅ **n8n Compatibility**: Works with n8n workflows and OpenAI node
+- ✅ **Performance**: Minimal overhead for OpenAI-native models
 
-## Why This is Safe
-
-- **No deletions**: Only surgical additions and targeted modifications
-- **Preserves existing functionality**: All current API contracts and behaviors maintained  
-- **Graceful error handling**: Token pre-warm failures don't prevent server startup
-- **Backward compatible**: Existing clients and workflows unaffected
-- **Comprehensive testing**: 100% pass rate on extensive test suite
-
-## Verification Steps
-
-### Prerequisites
+## Migration
+The new architecture is disabled by default and can be enabled with:
 ```bash
-cd src
-export N8N_COMPAT_MODE=1
-python async_endpoint_server.py  # or hypercorn async_endpoint_server:app --bind 0.0.0.0:8000
+export OPENAI_FRONTDOOR_ENABLED=1
 ```
 
-### 1. Verify Token Pre-Warming Eliminates First-Request 401
-```bash
-# Should show models immediately without auth delay
-curl -s http://localhost:8000/v1/models | head -n 5
+No changes are needed to existing API calls or client applications. All functionality is preserved with enhanced compatibility.
 
-# First chat request should succeed (no 401)
-curl -s http://localhost:8000/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -H 'User-Agent: openai/js 5.12.1' \
-  -d '{"model":"sfdc_ai__DefaultGPT4Omni","messages":[{"role":"user","content":"ping"}]}' | jq .
+## Rollback
+If needed, the system can be rolled back to the previous architecture:
+```bash
+export OPENAI_FRONTDOOR_ENABLED=0
+# or
+git checkout pre-openai-frontdoor-<timestamp>
 ```
 
-### 2. Verify OpenAI-JS User Agent Detection
-```bash
-# Should trigger n8n compatibility (check logs for has_n8n=True)
-curl -s http://localhost:8000/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -H 'User-Agent: openai/js 5.12.1' \
-  -d '{
-    "model":"sfdc_ai__DefaultGPT4Omni",
-    "messages":[{"role":"user","content":"test"}],
-    "tools":[{"type":"function","function":{"name":"test_tool","parameters":{"type":"object"}}}],
-    "tool_choice":"auto"
-  }' | jq '.choices[0].message.content'
-```
-
-### 3. Verify Narrative Text with Brackets Doesn't Trigger Parser
-```bash
-curl -s http://localhost:8000/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -H 'User-Agent: openai/js 5.12.1' \
-  -d '{"model":"sfdc_ai__DefaultGPT4Omni","messages":[{"role":"user","content":"Tell me a story with [brackets] but no tools."}]}' \
-  | jq '.choices[0].finish_reason'
-```
-
-### 4. Verify Existing Functionality Preserved
-```bash
-# Regular user agent should work normally (has_n8n=False in logs)
-curl -s http://localhost:8000/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -H 'User-Agent: python-client/1.0' \
-  -d '{"model":"sfdc_ai__DefaultGPT4Omni","messages":[{"role":"user","content":"Hello"}]}' \
-  | jq '.choices[0].message.content'
-```
-
-## Expected Log Messages
-
-- ✅ **Startup**: `🔐 OAuth token pre-warmed successfully`
-- ✅ **n8n Detection**: `UA='openai/js 5.12.1', has_n8n=True, detected=True`
-- ✅ **n8n Behavior**: `🔧 N8N compatibility mode: ignoring tools and forcing non-tool behavior`
-- ❌ **No Errors**: Should NOT see "Invalid token" or "Failed to parse tool calls JSON"
-
-## Testing Results
-
-- **Manual API Tests**: 7/7 PASSED ✅
-- **Automated Test Suite**: 4/4 PASSED ✅  
-- **Integration Tests**: 5/5 PASSED ✅
-- **Edge Case Tests**: 3/3 PASSED ✅
-- **Performance**: All response times < 6s ✅
+## Documentation
+- Updated README.md with new architecture description
+- Updated ARCHITECTURE.md with detailed implementation guide
+- Updated COMPATIBILITY.md with integration information
+- Added CHANGELOG.md entry
+- Created detailed implementation documentation
 
 ## Files Modified
+- **Created**:
+  - `src/model_capabilities.py` - Model capability registry
+  - `src/openai_spec_adapter.py` - Backend adapter framework
+  - `src/openai_tool_fix.py` - Tool-call repair shim
+  - `test_openai_frontdoor.py` - Comprehensive test suite
+  - `test_tool_repair_shim.py` - Tool-call repair tests
+  - `test_integration_tool_repair.py` - Integration tests
+  - `CHANGELOG.md` - Comprehensive changelog
 
-- `src/async_endpoint_server.py` - Token pre-warming and enhanced UA detection
-- `src/tool_schemas.py` - Hardened JSON parsing with fence stripping
-- `README.md` - Updated n8n compatibility documentation
-- `N8N_COMPATIBILITY.md` - Enhanced technical documentation
-
-## Rollback Instructions
-
-If issues arise, rollback options:
-
-### Option 1: Revert the merge commit
-```bash
-git checkout main
-git revert <merge-commit-sha>
-```
-
-### Option 2: Use safety tag
-```bash
-git checkout -B main pre-n8n-tool-parse-fix-<timestamp>
-```
-
-### Option 3: Environment variable override
-```bash
-export N8N_COMPAT_MODE=0  # Temporarily disable n8n compatibility
-```
-
-## Acceptance Criteria ✅
-
-- [x] First `/v1/chat/completions` request succeeds without 401 errors
-- [x] Token pre-warm success message appears in startup logs  
-- [x] Responses with ```json-wrapped tool arrays parse without error
-- [x] Narrative replies with stray `[` don't trigger parser failures
-- [x] `openai/js` user agents use n8n-compatible behavior
-- [x] All existing functionality preserved with zero breaking changes
-- [x] Comprehensive test coverage with 100% pass rate
-
-This implementation provides a robust foundation for reliable n8n and OpenAI-JS client integration while maintaining full backward compatibility with existing systems.
+- **Modified**:
+  - `src/async_endpoint_server.py` - Integration with new architecture
+  - `README.md` - Updated features and documentation
+  - `docs/ARCHITECTURE.md` - Added OpenAI Front-Door documentation
+  - `docs/COMPATIBILITY.md` - Updated integration guide

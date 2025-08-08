@@ -3,10 +3,11 @@
 ## Table of Contents
 1. [System Overview & Components](#system-overview--components)
 2. [Server Architecture](#server-architecture)
-3. [Authentication & Token Management](#authentication--token-management)
-4. [Tool Calling Framework](#tool-calling-framework)
-5. [Performance Characteristics](#performance-characteristics)
-6. [Model Access & Configuration](#model-access--configuration)
+3. [OpenAI Front-Door & Backend Adapters](#openai-front-door--backend-adapters)
+4. [Authentication & Token Management](#authentication--token-management)
+5. [Tool Calling Framework](#tool-calling-framework)
+6. [Performance Characteristics](#performance-characteristics)
+7. [Model Access & Configuration](#model-access--configuration)
 
 ## System Overview & Components
 
@@ -14,6 +15,9 @@ The Salesforce Models API Gateway serves as a bridge between client applications
 
 Key functions include:
 - Translating OpenAI API requests to Salesforce API format
+- Universal OpenAI v1 specification compliance for all model backends
+- Intelligent backend adapters for OpenAI, Anthropic, and Gemini models
+- Automatic tool-call repair for universal tool calling compatibility
 - Managing authentication with Salesforce
 - Providing advanced tool calling capabilities
 - Ensuring thread-safe concurrent request handling
@@ -27,6 +31,11 @@ Key functions include:
   
 - **Client Implementation:**
   - `salesforce_models_client.py` - Contains both sync and async client classes for Salesforce API
+
+- **OpenAI Front-Door Architecture:**
+  - `model_capabilities.py` - Model capability registry and routing
+  - `openai_spec_adapter.py` - Backend adapter framework for universal OpenAI compliance
+  - `openai_tool_fix.py` - Tool-call repair shim for universal compatibility
 
 - **Tool Calling Framework:**
   - `tool_handler.py` - Advanced function calling implementation
@@ -47,6 +56,7 @@ Key functions include:
 - **Configuration:**
   - `config.json` - Environment-based configuration
   - Environment variables as fallback
+  - `config/models.yml` - Model capabilities configuration
 
 ### Technology Stack
 
@@ -136,6 +146,117 @@ async def chat_completions():
     response = await client._async_chat_completion(...)  # Pure async
 ```
 
+## OpenAI Front-Door & Backend Adapters
+
+The OpenAI Front-Door architecture transforms the gateway from UA-based tool filtering to universal OpenAI v1 specification compliance with intelligent backend adapters for different model providers.
+
+### Architecture Components
+
+#### 1. Model Capabilities Registry
+
+The `model_capabilities.py` module provides a centralized capability definition system that determines how requests should be routed based on model characteristics rather than user agents.
+
+**Key Features:**
+- Environment variable and config file support
+- Default model mappings for common models
+- Capability flags: `openai_compatible`, `anthropic_bedrock`, `vertex_gemini`
+- Thread-safe lazy loading and caching
+- Intelligent fallback patterns for unknown models
+
+**Example Usage:**
+```python
+from model_capabilities import caps_for, get_backend_type
+
+caps = caps_for("sfdc_ai__DefaultGPT4Omni")
+# Returns: {'openai_compatible': True, 'passthrough_tools': True, ...}
+
+backend = get_backend_type("claude-3-sonnet")  
+# Returns: 'anthropic_bedrock'
+```
+
+**Configuration Sources** (in priority order):
+1. `MODEL_CAPABILITIES_JSON` environment variable (JSON string)
+2. `MODEL_CAPABILITIES_FILE` environment variable (file path)
+3. `config/models.yml` or `config/models.json` (YAML/JSON file)
+4. Built-in defaults
+
+#### 2. OpenAI Specification Adapter
+
+The `openai_spec_adapter.py` module provides a universal backend adapter system that normalizes responses from different LLM backends to OpenAI v1 specification format.
+
+**Key Functions:**
+- `route_and_normalise(payload, clients)` - Universal request router and response normalizer
+- Backend-specific normalizers for Anthropic, Gemini, and generic models
+
+**Response Flow:**
+```
+Client Request (OpenAI format)
+↓
+route_and_normalise() 
+↓
+Backend-specific client call
+↓
+Backend-specific normalizer
+↓
+OpenAI v1 compliant response
+```
+
+#### 3. Tool-Call Repair Shim
+
+The `openai_tool_fix.py` module implements a universal tool-call repair system that eliminates "Tool call missing function name" errors and ensures OpenAI v1 specification compliance across all model backends.
+
+**Key Features:**
+- Fixes missing `function.name` fields using tool definitions
+- Ensures `function.arguments` are properly formatted as JSON strings
+- Handles malformed tool call structures gracefully
+- Provides comprehensive validation and health checking
+- Thread-safe operations with performance optimizations
+
+### Model Backend Types
+
+**OpenAI-Compatible (Direct Passthrough)**:
+- `sfdc_ai__DefaultGPT4Omni`
+- `gpt-4`, `gpt-4-mini`, `gpt-4-turbo`
+- `gpt-3.5-turbo`
+
+**Anthropic/Bedrock (Requires Normalization)**:
+- `sfdc_ai__DefaultBedrockAnthropicClaude4Sonnet`
+- `sfdc_ai__DefaultBedrockAnthropicClaude37Sonnet` 
+- `claude-3-haiku`, `claude-3-sonnet`, `claude-4-sonnet`
+
+**Google Vertex/Gemini (Requires Normalization)**:
+- `sfdc_ai__DefaultVertexAIGemini25Flash001`
+- `gemini-pro`, `gemini-flash`
+
+### Universal Tool Preservation
+
+The OpenAI Front-Door architecture preserves tools for all clients and model backends, eliminating the previous User-Agent based tool filtering approach:
+
+```python
+# OLD - UA-based filtering (REMOVED)
+n8n_detected = ('n8n' in user_agent) and n8n_compat_env
+if n8n_detected and not PRESERVE_TOOLS:
+    tools = None  # Tool filtering based on User-Agent
+
+# NEW - Universal tool preservation  
+logger.debug(f"🔧 Universal OpenAI compatibility: tools={'preserved' if tools else 'none'}")
+```
+
+### Environment Controls
+
+```bash
+# Enable OpenAI Front-Door Architecture
+export OPENAI_FRONTDOOR_ENABLED=1
+
+# Model Capabilities Configuration
+export MODEL_CAPABILITIES_JSON="{...}"
+export MODEL_CAPABILITIES_FILE="config/models.yml"
+
+# Tool Behavior Controls
+export N8N_COMPAT_PRESERVE_TOOLS=1
+export OPENAI_NATIVE_TOOL_PASSTHROUGH=1
+```
+
 ## Authentication & Token Management
 
 The gateway uses JWT-based token management for authentication with Salesforce:
@@ -194,7 +315,7 @@ async def resolve_config_path(config_file: str = 'config.json') -> str:
 
 ## Tool Calling Framework
 
-The Salesforce Models API Gateway includes a comprehensive tool calling framework that enables function execution through LLM interactions. This framework is fully compatible with both OpenAI and Anthropic tool calling formats.
+The Salesforce Models API Gateway includes a comprehensive tool calling framework that enables function execution through LLM interactions. This framework is fully compatible with OpenAI, Anthropic, and Gemini tool calling formats, with universal OpenAI v1 specification compliance through the backend adapters and tool-call repair shim.
 
 ### Tool Handler Architecture
 
@@ -223,6 +344,8 @@ The tool calling system includes special support for n8n workflow automation:
 - Full support for `$fromAI()` parameter extraction
 - Compatible with n8n's function calling format
 - Proper handling of `function`, `name`, and `parameters` fields
+- Universal tool preservation with automatic tool-call repair
+- All models (including Anthropic/Claude) now work with tool calling in n8n
 
 ### Tool Schema Example
 
@@ -366,4 +489,37 @@ The gateway supports multiple models through Salesforce's Einstein Trust Layer:
 
 ### Model Configuration
 
-Models are configured through Salesforce's Einstein Trust Layer. The gateway maps external model names to internal Salesforce model identifiers.
+The gateway now uses a configuration-driven approach for model capabilities and backend routing:
+
+#### Model Capabilities Registry
+
+The model capabilities registry provides a centralized way to define model capabilities and routing:
+
+```yaml
+# config/models.yml example
+gpt-4:
+  openai_compatible: true
+  backend_type: "openai_native"
+  passthrough_tools: true
+
+claude-3-sonnet:
+  openai_compatible: false
+  anthropic_bedrock: true
+  backend_type: "anthropic_bedrock"
+  requires_normalization: true
+  
+gemini-pro:
+  vertex_gemini: true
+  backend_type: "vertex_gemini"
+  requires_normalization: true
+```
+
+#### Default Model Mappings
+
+Out-of-the-box, the system includes default mappings for common models:
+
+- **OpenAI-Compatible**: `sfdc_ai__DefaultGPT4Omni`, `gpt-4`, `gpt-4-turbo`, etc.
+- **Anthropic/Bedrock**: `sfdc_ai__DefaultBedrockAnthropicClaude4Sonnet`, `claude-3-*`, etc.
+- **Google Vertex/Gemini**: `sfdc_ai__DefaultVertexAIGemini25Flash001`, `gemini-*`, etc.
+
+These mappings can be overridden through environment variables or configuration files.

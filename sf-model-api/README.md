@@ -57,9 +57,11 @@ curl http://localhost:8000/v1/models
 
 ## 🎯 Key Features
 
-- ✅ **100% OpenAI API Compatible** - Works with OpenWebUI, n8n, LangChain, and standard OpenAI clients
-- ✅ **Complete Tool Calling** - Full OpenAI function calling with built-in safe functions and passthrough mode
-- ✅ **n8n Compatibility Mode** - Automatic client detection (n8n and openai/js) for seamless integration
+- ✅ **100% OpenAI API Compatible** - Universal OpenAI v1 specification compliance with all model backends
+- ✅ **Backend Adapters Architecture** - Intelligent routing and normalization for OpenAI, Anthropic, and Gemini models
+- ✅ **Complete Tool Calling** - Full OpenAI function calling with automatic tool-call repair shim
+- ✅ **n8n Compatibility Mode** - Full tool preservation with seamless integration for all models
+- ✅ **Model Capabilities Registry** - Configuration-driven model routing based on capabilities
 - ✅ **Enterprise Authentication** - OAuth 2.0 Client Credentials Flow with token pre-warming and aggressive management
 - ✅ **Thread-Safe Architecture** - Scalable design with multi-layer token caching
 - ✅ **Smart Timeout Management** - Dynamic timeouts based on request characteristics
@@ -78,11 +80,16 @@ sf-model-api/
 │   ├── streaming_architecture.py # Advanced streaming response system
 │   ├── tool_handler.py          # Tool calling orchestration and execution
 │   ├── tool_schemas.py          # Pydantic models for tool validation
-│   └── unified_response_formatter.py # Response format standardization
+│   ├── unified_response_formatter.py # Response format standardization
+│   ├── model_capabilities.py     # Model capability registry and routing
+│   ├── openai_spec_adapter.py   # Backend adapter framework for OpenAI compliance
+│   └── openai_tool_fix.py       # Tool-call repair shim for universal compatibility
 ├── tests/                       # Comprehensive test suite
 │   ├── test_streaming_*.py      # Streaming functionality tests
 │   ├── test_tool_calling.py     # Tool calling tests
-│   └── test_api_compliance_*.py # API compliance tests
+│   ├── test_api_compliance_*.py # API compliance tests
+│   ├── test_openai_frontdoor.py # OpenAI front-door architecture tests
+│   └── test_tool_repair_shim.py # Tool-call repair tests
 ├── docs/                        # Comprehensive documentation
 │   ├── ARCHITECTURE.md          # System architecture and components
 │   ├── COMPATIBILITY.md         # Client integration guide
@@ -112,8 +119,17 @@ export SALESFORCE_PRIVATE_KEY_FILE="/path/to/server.key"
 export SALESFORCE_API_VERSION="v64.0"
 export ENVIRONMENT="development"
 export SF_RESPONSE_DEBUG="false"
-export N8N_COMPAT_MODE="1"     # Set to "0" to disable n8n compatibility mode (includes openai/js clients)
-export VERBOSE_TOOL_LOGS="0"   # Set to "1" for detailed tool calling logs
+
+# OpenAI Front-Door Architecture
+export OPENAI_FRONTDOOR_ENABLED="1"        # Enable new architecture (recommended)
+export MODEL_CAPABILITIES_JSON="{...}"     # Optional: Override model capabilities via JSON
+export MODEL_CAPABILITIES_FILE="config/models.yml"  # Optional: Model config file path
+
+# Compatibility Options
+export N8N_COMPAT_MODE="1"              # Set to "0" to disable n8n compatibility mode
+export N8N_COMPAT_PRESERVE_TOOLS="1"   # Preserve tools for n8n clients (recommended)
+export OPENAI_NATIVE_TOOL_PASSTHROUGH="1" # Direct passthrough for OpenAI models
+export VERBOSE_TOOL_LOGS="0"           # Set to "1" for detailed tool calling logs
 ```
 
 ### Configuration File
@@ -134,12 +150,14 @@ Create `config.json` from `config.json.example`:
 
 ### OpenAI-Compatible Endpoints
 
-The server provides OpenAI-compatible endpoints on `http://localhost:8000`:
+The server provides universal OpenAI v1 specification-compatible endpoints on `http://localhost:8000`:
 
 - `GET /health` - Health check endpoint
 - `GET /v1/models` - List available models in OpenAI format
-- `POST /v1/chat/completions` - Chat completion with tool calling support
+- `POST /v1/chat/completions` - Chat completion with universal tool calling support
 - `POST /v1/completions` - Text completion (legacy compatibility)
+
+All responses conform to OpenAI v1 specification regardless of the backend model provider (OpenAI, Anthropic, or Gemini).
 
 ### Basic Usage
 
@@ -276,11 +294,18 @@ This behavior ensures compatibility with tools like n8n v1.105.4 and Claude Code
 
 ### Behavior
 
-The API gateway implements intelligent client detection and adapts its behavior accordingly. When `tools` are present in a request from an n8n client or openai/js client (detected via User-Agent) or when `N8N_COMPAT_MODE=1` is set, the gateway automatically:
+The API gateway implements the OpenAI Front-Door architecture with intelligent backend adapters for different model providers:
+
+- **OpenAI-Native Models**: Direct passthrough with optimal performance
+- **Anthropic Models**: Claude format → OpenAI tool_calls normalization
+- **Gemini Models**: Vertex AI format → OpenAI tool_calls normalization
+- **Tool-Call Repair**: Automatic fix for "Tool call missing function name" errors
+
+When `tools` are present in a request from an n8n client or openai/js client (detected via User-Agent) or when `N8N_COMPAT_MODE=1` is set, the gateway automatically:
 
 - Returns non-streaming responses even when `stream=true` is requested
 - Adds `x-stream-downgraded: true` header to indicate streaming was disabled
-- Ignores tool metadata to ensure compatibility with n8n's JSON parser
+- Preserves tools for all clients and model backends
 - Adds `x-proxy-latency-ms` header to all non-streaming responses for diagnostics
 
 These adaptations ensure seamless integration with n8n workflows while maintaining full functionality for other clients. Regular clients continue to receive streaming responses (unless tools are present, which always requires stream downgrading). Set `N8N_COMPAT_MODE=0` to disable this behavior if needed.
