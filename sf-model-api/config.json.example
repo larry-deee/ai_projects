@@ -1,0 +1,27 @@
+{
+    "consumer_key": "YOUR_SALESFORCE_CONNECTED_APP_CONSUMER_KEY",
+    "consumer_secret": "YOUR_SALESFORCE_CONNECTED_APP_CONSUMER_SECRET",
+    "username": "your-username@salesforce.com",
+    "instance_url": "https://your-instance.my.salesforce.com",
+    "api_version": "v64.0",
+    "token_file": "salesforce_models_token.json",
+    "default_model": "claude-4-sonnet",
+    "default_max_tokens": 1000,
+    "default_temperature": 0.7,
+    "oauth_timeout": 60,
+    "token_buffer_seconds": 600,
+    "max_oauth_retries": 3,
+    "connection_pool_size": 10,
+    "keep_alive_timeout": 30,
+    "tool_calling": {
+        "security_profile": "development",
+        "allow_dangerous_functions": true,
+        "enable_write_operations": true,
+        "write_operation_whitelist": ["file_write", "file_create", "file_delete", "directory_create", "directory_delete", "execute_command"],
+        "strict_parameter_validation": true,
+        "max_concurrent_calls": 3,
+        "timeout": 30.0,
+        "allowed_dangerous_functions": ["execute_command", "file_system_access", "network_request"],
+        "blocked_functions": []
+    }
+}

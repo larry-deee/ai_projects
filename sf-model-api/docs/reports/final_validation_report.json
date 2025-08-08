@@ -1,0 +1,58 @@
+{
+  "timestamp": 1754488820,
+  "summary": {
+    "total_suites": 4,
+    "suites_passed": 1,
+    "suites_failed": 3,
+    "success_rate": 25.0,
+    "total_duration": 297.6759419441223,
+    "deployment_ready": false
+  },
+  "suite_results": [
+    {
+      "name": "API Compliance",
+      "passed": false,
+      "tests_run": 0,
+      "failures": 0,
+      "errors": 0,
+      "duration": 0.023896217346191406,
+      "details": "OpenAI and Anthropic API specification validation"
+    },
+    {
+      "name": "n8n Compatibility",
+      "passed": false,
+      "tests_run": 0,
+      "failures": 0,
+      "errors": 0,
+      "duration": 0.00711512565612793,
+      "details": "n8n workflow integration and parameter extraction"
+    },
+    {
+      "name": "Claude Code Compatibility",
+      "passed": false,
+      "tests_run": 0,
+      "failures": 0,
+      "errors": 0,
+      "duration": 0.1116950511932373,
+      "details": "Claude Code client integration and Anthropic format"
+    },
+    {
+      "name": "Performance Regression",
+      "passed": true,
+      "tests_run": 0,
+      "failures": 0,
+      "errors": 0,
+      "duration": 297.5235278606415,
+      "details": "Async optimization and performance validation"
+    }
+  ],
+  "recommendations": [
+    "\u274c System NOT ready for production deployment",
+    "\ud83d\udd27 Critical issues must be resolved before deployment",
+    "\ud83d\udd0d API compliance issues - review OpenAI/Anthropic specification adherence",
+    "\ud83e\uddea n8n integration requires attention - check $fromAI() processing",
+    "\ud83e\udd16 Claude Code integration issues - verify Anthropic format compliance",
+    "\ud83d\ude80 Async optimization is working correctly",
+    "\ud83d\udd27 Multiple issues detected - comprehensive review needed"
+  ]
+}
