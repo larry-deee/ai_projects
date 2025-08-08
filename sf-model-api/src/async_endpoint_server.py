@@ -325,6 +325,15 @@ async def startup():
     """Application startup - initialize async components."""
     logger.info("🚀 Starting async optimization server...")
     await initialize_global_config()
+    
+    # Pre-warm OAuth token to avoid first-request 401
+    try:
+        client = await AsyncClientManager.get_client()
+        # Uses existing internal flow; safe to call at boot
+        await client._async_get_access_token()
+        logger.info("🔐 OAuth token pre-warmed successfully")
+    except Exception as e:
+        logger.warning(f"⚠️ Token pre-warm failed (will refresh on demand): {e}")
 
 @app.after_serving
 async def shutdown():
@@ -679,10 +688,10 @@ async def chat_completions():
         # N8N COMPATIBILITY: Detect n8n caller and force non-tool behavior
         user_agent = request.headers.get('User-Agent', '').lower()
         n8n_compat_env = os.environ.get('N8N_COMPAT_MODE', '1') == '1'  # Default enabled
-        n8n_detected = 'n8n' in user_agent and n8n_compat_env
+        n8n_detected = (('n8n' in user_agent) or user_agent.startswith('openai/js')) and n8n_compat_env
         
         # DEBUG: Temporary logging for n8n detection
-        logger.warning(f"🔍 DEBUG ALL REQUESTS: UA='{user_agent}', has_n8n={'n8n' in user_agent}, compat_env={n8n_compat_env}, detected={n8n_detected}")
+        logger.warning(f"🔍 DEBUG ALL REQUESTS: UA='{user_agent}', has_n8n={n8n_detected}, compat_env={n8n_compat_env}, detected={n8n_detected}")
         if 'n8n' in user_agent:
             logger.warning(f"🔍 DEBUG: n8n User-Agent detected: {user_agent[:50]}, compat_env: {n8n_compat_env}, detected: {n8n_detected}")
         
