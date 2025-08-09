@@ -523,3 +523,133 @@ Out-of-the-box, the system includes default mappings for common models:
 - **Google Vertex/Gemini**: `sfdc_ai__DefaultVertexAIGemini25Flash001`, `gemini-*`, etc.
 
 These mappings can be overridden through environment variables or configuration files.
+
+## Anthropic Compatibility Architecture
+
+In addition to the OpenAI Front-Door architecture, the gateway now includes native Anthropic API compatibility through dedicated endpoints at `/anthropic/v1/*`. This provides exact compliance with Anthropic's API specification while leveraging the same Salesforce backend infrastructure.
+
+### Anthropic-Compatible Components
+
+#### 1. Anthropic Router (`src/routers/anthropic_compat_async.py`)
+
+The Anthropic compatibility router provides a Quart-based async implementation with these key features:
+
+- **Exact API Compliance**: Full adherence to Anthropic's API specification
+- **SSE Streaming**: Proper Anthropic event sequence (message_start → content_block_* → message_stop)
+- **Model Verification**: Configuration-driven model mapping and availability checking
+- **Error Handling**: Anthropic-compatible error response format
+
+```python
+from routers.anthropic_compat_async import create_anthropic_compat_router
+
+# Register the Anthropic-compatible router
+app.register_blueprint(create_anthropic_compat_router(), url_prefix='/anthropic')
+```
+
+#### 2. Format Transformation (`src/compat_async/`)
+
+The format transformation modules handle bidirectional conversion between Anthropic and Salesforce formats:
+
+- **`anthropic_mapper.py`**: Converts between Anthropic message format and Salesforce request/response formats
+- **`model_map.py`**: Handles model verification and mapping from Anthropic model IDs to Salesforce models
+- **`tokenizers.py`**: Provides Anthropic-compatible token counting functionality
+
+#### 3. Model Configuration (`config/anthropic_models.map.json`)
+
+The model mapping configuration defines the relationship between Anthropic model IDs and Salesforce models:
+
+```json
+[
+  {
+    "anthropic_id": "claude-3-haiku-20240307",
+    "sf_model": "sfdc_ai__DefaultBedrockAnthropicClaude3Haiku",
+    "max_tokens": 4096,
+    "supports_streaming": true,
+    "display_name": "Claude 3 Haiku",
+    "description": "Fast and efficient Claude 3 Haiku model for quick responses"
+  }
+]
+```
+
+### Anthropic API Endpoints
+
+#### Available Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/anthropic/v1/models` | GET | List available Anthropic models |
+| `/anthropic/v1/messages` | POST | Create messages with full streaming support |
+| `/anthropic/v1/messages/count_tokens` | POST | Count tokens for Anthropic message format |
+
+#### Message Format Transformation
+
+The system handles transformation between Anthropic's content block format and Salesforce's internal format:
+
+**Anthropic Format (Input)**:
+```json
+{
+  "messages": [
+    {"role": "user", "content": "Hello, Claude!"}
+  ],
+  "system": "You are a helpful assistant.",
+  "max_tokens": 1000
+}
+```
+
+**Salesforce Format (Internal)**:
+```json
+{
+  "messages": "System: You are a helpful assistant.\n\nHuman: Hello, Claude!\n\nAssistant:",
+  "parameters": {
+    "maxTokenCount": 1000
+  }
+}
+```
+
+**Anthropic Format (Output)**:
+```json
+{
+  "id": "msg_01ABC123",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {"type": "text", "text": "Hello! How can I help you today?"}
+  ],
+  "model": "claude-3-haiku-20240307",
+  "stop_reason": "end_turn",
+  "usage": {
+    "input_tokens": 23,
+    "output_tokens": 15
+  }
+}
+```
+
+#### Streaming Architecture
+
+The Anthropic streaming implementation follows the exact SSE event sequence specified by Anthropic:
+
+1. **`message_start`**: Begins the response with message metadata
+2. **`content_block_start`**: Starts a content block
+3. **`content_block_delta`**: Provides incremental text updates
+4. **`content_block_stop`**: Ends the content block
+5. **`message_delta`**: Provides updated metadata (stop reason, usage)
+6. **`message_stop`**: Completes the response
+
+### Performance Characteristics
+
+The Anthropic-compatible implementation uses the same async architecture optimizations as the OpenAI endpoints:
+
+- **Async Architecture**: Full async/await patterns with no sync wrappers
+- **Connection Pooling**: Persistent TCP connections to Salesforce backend
+- **Memory Efficiency**: Bounded memory usage with streaming responses
+- **Model Verification Caching**: Cached model availability checks
+
+### Integration Benefits
+
+The native Anthropic compatibility provides several advantages:
+
+1. **Seamless Migration**: Existing Anthropic SDK code requires minimal changes (just base URL)
+2. **Dual API Support**: Applications can use both OpenAI and Anthropic APIs through the same gateway
+3. **Unified Authentication**: Single Salesforce authentication for all models
+4. **Consistent Performance**: Same performance optimizations applied to both API formats
+5. **Enterprise Features**: Salesforce's security, compliance, and monitoring capabilities

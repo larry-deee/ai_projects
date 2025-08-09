@@ -45,6 +45,27 @@
         
         "timeout": 30.0
         // Tool execution timeout in seconds (prevents hanging operations)
+    },
+    
+    // ----------------------------------------------------------------------------
+    // ANTHROPIC NATIVE PASS-THROUGH (Optional Configuration)
+    // ----------------------------------------------------------------------------
+    // Configuration for the hardened Anthropic native adapter
+    // These settings enable direct pass-through to Anthropic API
+    
+    "anthropic_native": {
+        "base_url": "https://api.anthropic.com",
+        // Default: "https://api.anthropic.com" - Anthropic API base URL
+        
+        "version": "2023-06-01",
+        // Default: "2023-06-01" - Anthropic API version header
+        
+        "timeout": 60.0,
+        // Default: 60.0 - Request timeout in seconds
+        
+        "api_key": "YOUR_ANTHROPIC_API_KEY"
+        // Required for native pass-through functionality
+        // Can also be set via ANTHROPIC_API_KEY environment variable
     }
     
     // ============================================================================

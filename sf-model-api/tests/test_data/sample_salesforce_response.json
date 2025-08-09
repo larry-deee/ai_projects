@@ -1,0 +1,11 @@
+{
+  "generations": [
+    {
+      "text": "Hello! I'm Claude, an AI assistant created by Anthropic. How can I help you today?"
+    }
+  ],
+  "usage": {
+    "inputTokenCount": 10,
+    "outputTokenCount": 20
+  }
+}

@@ -58,12 +58,74 @@ The tool-call repair shim ensures universal compatibility:
 
 ## Table of Contents
 1. [OpenAI Front-Door & Backend Adapters](#openai-front-door--backend-adapters)
-2. [n8n Integration & Behavior](#n8n-integration--behavior)
-3. [Claude Code Tool Calling & SSE](#claude-code-tool-calling--sse)
-4. [OpenAI API Compliance](#openai-api-compliance)
-5. [Response Format Standardization](#response-format-standardization)
-6. [Streaming Behavior & Headers](#streaming-behavior--headers)
-7. [Known Limitations & Workarounds](#known-limitations--workarounds)
+2. [Anthropic API Compatibility](#anthropic-api-compatibility)
+3. [n8n Integration & Behavior](#n8n-integration--behavior)
+4. [Claude Code Tool Calling & SSE](#claude-code-tool-calling--sse)
+5. [OpenAI API Compliance](#openai-api-compliance)
+6. [Response Format Standardization](#response-format-standardization)
+7. [Streaming Behavior & Headers](#streaming-behavior--headers)
+8. [Known Limitations & Workarounds](#known-limitations--workarounds)
+
+## Anthropic API Compatibility
+
+The Salesforce Models API Gateway now provides native Anthropic API compatibility through dedicated endpoints at `/anthropic/v1/*`. These endpoints offer exact compliance with the Anthropic API specification while leveraging Salesforce's Einstein Trust Layer infrastructure.
+
+### Key Features
+
+- **Exact API Compliance**: Full compatibility with Anthropic's API specification
+- **Native Message Format**: Support for Anthropic's content blocks and message structure
+- **SSE Streaming**: Proper Anthropic SSE event sequence (message_start → content_block_* → message_stop)
+- **Model Mapping**: Configuration-driven model verification and mapping
+- **Performance Optimized**: Async architecture with 40-60% performance improvements
+
+### Anthropic SDK Integration
+
+The Anthropic-compatible endpoints work seamlessly with the official Anthropic SDKs:
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(
+    api_key="any-key",  # Not used for local API
+    base_url="http://localhost:8000/anthropic"
+)
+
+response = client.messages.create(
+    model="claude-3-haiku-20240307",
+    messages=[
+        {"role": "user", "content": "Hello, Claude!"}
+    ],
+    max_tokens=1000
+)
+```
+
+### Required Headers
+
+All Anthropic-compatible endpoints require:
+
+```
+anthropic-version: 2023-06-01
+Content-Type: application/json  (for POST requests)
+```
+
+### Available Endpoints
+
+- `GET /anthropic/v1/models` - List available models
+- `POST /anthropic/v1/messages` - Create messages with streaming support
+- `POST /anthropic/v1/messages/count_tokens` - Count tokens for messages
+
+### Model Mapping
+
+Models are mapped between Anthropic IDs and Salesforce models via `config/anthropic_models.map.json`:
+
+| Anthropic Model ID | Salesforce Model |
+|-------------------|------------------|
+| `claude-3-haiku-20240307` | `sfdc_ai__DefaultBedrockAnthropicClaude3Haiku` |
+| `claude-3-sonnet-20240229` | `sfdc_ai__DefaultBedrockAnthropicClaude37Sonnet` |
+| `claude-3-opus-20240229` | `sfdc_ai__DefaultBedrockAnthropicClaude4Sonnet` |
+| `claude-3-5-sonnet-latest` | `sfdc_ai__DefaultBedrockAnthropicClaude37Sonnet` |
+
+For detailed documentation, see [docs/ANTHROPIC_API.md](ANTHROPIC_API.md).
 
 ## n8n Integration & Behavior
 

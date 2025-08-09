@@ -410,11 +410,48 @@ class MultiClientAdapter:
         self.anthropic = self.generic  
         self.gemini = self.generic
 
+async def register_anthropic_router():
+    """
+    Register Anthropic compatibility router based on configuration.
+    
+    This function conditionally registers the Anthropic compatibility router
+    at the /anthropic path while gating the legacy native router behind
+    the NATIVE_ANTHROPIC_ENABLED flag for backward compatibility.
+    """
+    try:
+        # Check configuration flags
+        native_anthropic_enabled = os.getenv("NATIVE_ANTHROPIC_ENABLED", "false").lower() == "true"
+        
+        if native_anthropic_enabled:
+            # Register legacy native Anthropic router at /anthropic-native path
+            try:
+                from routers.anthropic_native import create_anthropic_router
+                native_router = create_anthropic_router(url_prefix='/anthropic-native')
+                app.register_blueprint(native_router)
+                logger.info("✅ Legacy Anthropic native router registered at /anthropic-native")
+            except ImportError as e:
+                logger.warning(f"⚠️ Failed to import legacy Anthropic router: {e}")
+        
+        # Always register the new Anthropic compatibility router at /anthropic
+        try:
+            from routers.anthropic_compat_async import create_anthropic_compat_router
+            compat_router = create_anthropic_compat_router()
+            app.register_blueprint(compat_router, url_prefix='/anthropic')
+            logger.info("✅ Anthropic compatibility router registered at /anthropic")
+        except ImportError as e:
+            logger.error(f"❌ Failed to import Anthropic compatibility router: {e}")
+            
+    except Exception as e:
+        logger.error(f"❌ Error registering Anthropic routers: {e}")
+
 @app.before_serving
 async def startup():
     """Application startup - initialize async components."""
     logger.info("🚀 Starting async optimization server...")
     await initialize_global_config()
+    
+    # Register Anthropic compatibility router
+    await register_anthropic_router()
     
     # Pre-warm OAuth token to avoid first-request 401
     try:
@@ -434,6 +471,14 @@ async def shutdown():
     # Close connection pool
     pool = get_connection_pool()
     await pool.close()
+    
+    # Cleanup Anthropic native adapter resources
+    try:
+        from adapters.anthropic_native import shutdown_anthropic_adapter
+        await shutdown_anthropic_adapter()
+        logger.info("✅ Anthropic native adapter shutdown complete")
+    except Exception as e:
+        logger.warning(f"⚠️  Error during Anthropic adapter cleanup: {e}")
     
     # Log final performance metrics
     metrics = async_performance_metrics
@@ -1628,6 +1673,9 @@ def main():
     print(f"📍 Server: http://{host}:{port}")
     print(f"🔍 Health: http://{host}:{port}/health")
     print(f"📊 Metrics: http://{host}:{port}/v1/performance/metrics")
+    print(f"🤖 Anthropic API: http://{host}:{port}/anthropic/v1/messages")
+    if os.getenv("NATIVE_ANTHROPIC_ENABLED", "false").lower() == "true":
+        print(f"🔧 Legacy Native: http://{host}:{port}/anthropic-native/v1/messages")
     
     # Run Quart async server
     app.run(

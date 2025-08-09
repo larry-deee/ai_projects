@@ -58,6 +58,7 @@ curl http://localhost:8000/v1/models
 ## 🎯 Key Features
 
 - ✅ **100% OpenAI API Compatible** - Universal OpenAI v1 specification compliance with all model backends
+- ✅ **100% Anthropic API Compatible** - Exact Anthropic API specifications for seamless integration
 - ✅ **Backend Adapters Architecture** - Intelligent routing and normalization for OpenAI, Anthropic, and Gemini models
 - ✅ **Complete Tool Calling** - Full OpenAI function calling with automatic tool-call repair shim
 - ✅ **n8n Compatibility Mode** - Full tool preservation with seamless integration for all models
@@ -65,7 +66,7 @@ curl http://localhost:8000/v1/models
 - ✅ **Enterprise Authentication** - OAuth 2.0 Client Credentials Flow with token pre-warming and aggressive management
 - ✅ **Thread-Safe Architecture** - Scalable design with multi-layer token caching
 - ✅ **Smart Timeout Management** - Dynamic timeouts based on request characteristics
-- ✅ **Streaming Support** - Real-time response streaming with proper OpenAI chunk formatting and SSE heartbeats
+- ✅ **Streaming Support** - Real-time response streaming with proper OpenAI/Anthropic chunk formatting and SSE heartbeats
 - ✅ **Production Ready** - Comprehensive logging, monitoring, and deployment automation
 - ✅ **Multi-Model Access** - Support for Claude, GPT-4, and Gemini models through Salesforce
 
@@ -83,22 +84,42 @@ sf-model-api/
 │   ├── unified_response_formatter.py # Response format standardization
 │   ├── model_capabilities.py     # Model capability registry and routing
 │   ├── openai_spec_adapter.py   # Backend adapter framework for OpenAI compliance
-│   └── openai_tool_fix.py       # Tool-call repair shim for universal compatibility
+│   ├── openai_tool_fix.py       # Tool-call repair shim for universal compatibility
+│   ├── compat_async/           # Format transformation modules
+│   │   ├── __init__.py          # Module initialization
+│   │   ├── anthropic_mapper.py  # Anthropic ↔ Salesforce format mapping
+│   │   ├── model_map.py         # Model verification system
+│   │   └── tokenizers.py        # Anthropic token counting
+│   └── routers/                 # API route definitions
+│       ├── __init__.py          # Module initialization
+│       ├── anthropic_compat_async.py # Anthropic-compatible async router
+│       └── anthropic_native.py  # Direct Anthropic API proxy router
 ├── tests/                       # Comprehensive test suite
 │   ├── test_streaming_*.py      # Streaming functionality tests
 │   ├── test_tool_calling.py     # Tool calling tests
 │   ├── test_api_compliance_*.py # API compliance tests
 │   ├── test_openai_frontdoor.py # OpenAI front-door architecture tests
+│   ├── test_anthropic_*.py      # Anthropic compatibility tests
 │   └── test_tool_repair_shim.py # Tool-call repair tests
 ├── docs/                        # Comprehensive documentation
 │   ├── ARCHITECTURE.md          # System architecture and components
 │   ├── COMPATIBILITY.md         # Client integration guide
 │   ├── TESTING.md               # Testing procedures and commands
+│   ├── ANTHROPIC_API.md         # Anthropic API documentation
+│   ├── API_REFERENCE.md         # Complete endpoint catalog
+│   ├── CONFIGURATION.md         # Configuration options
+│   ├── MIGRATION.md             # Migration guides
+│   ├── examples/                # Integration examples
+│   │   ├── anthropic_basic.sh   # Basic cURL examples for Anthropic API
+│   │   ├── anthropic_streaming.sh # SSE streaming examples
+│   │   └── python_client_examples.py # Python integration examples
 │   └── reports/                 # QA validation reports
 ├── start_async_service.sh       # Async server startup script (recommended)
 ├── start_llm_service.sh         # Legacy sync server startup script
 ├── streaming_regression_tests.sh # Streaming validation tests
 ├── config.json                  # Server configuration
+├── config/                      # Configuration files
+│   └── anthropic_models.map.json # Anthropic model mapping configuration
 ├── requirements.txt             # Python dependencies
 ├── LICENSE                      # MIT License
 └── README.md                    # This file
@@ -125,6 +146,10 @@ export OPENAI_FRONTDOOR_ENABLED="1"        # Enable new architecture (recommende
 export MODEL_CAPABILITIES_JSON="{...}"     # Optional: Override model capabilities via JSON
 export MODEL_CAPABILITIES_FILE="config/models.yml"  # Optional: Model config file path
 
+# Anthropic API Compatibility
+export NATIVE_ANTHROPIC_ENABLED="1"       # Enable Anthropic-compatible endpoints
+export ANTHROPIC_MODEL_MAP="config/anthropic_models.map.json"  # Model mapping configuration
+
 # Compatibility Options
 export N8N_COMPAT_MODE="1"              # Set to "0" to disable n8n compatibility mode
 export N8N_COMPAT_PRESERVE_TOOLS="1"   # Preserve tools for n8n clients (recommended)
@@ -148,7 +173,9 @@ Create `config.json` from `config.json.example`:
 
 ## 📚 API Usage
 
-### OpenAI-Compatible Endpoints
+### API Endpoints
+
+#### OpenAI-Compatible Endpoints
 
 The server provides universal OpenAI v1 specification-compatible endpoints on `http://localhost:8000`:
 
@@ -159,7 +186,19 @@ The server provides universal OpenAI v1 specification-compatible endpoints on `h
 
 All responses conform to OpenAI v1 specification regardless of the backend model provider (OpenAI, Anthropic, or Gemini).
 
+#### Anthropic-Compatible Endpoints
+
+The server also provides exact Anthropic API specification-compatible endpoints on `http://localhost:8000/anthropic`:
+
+- `GET /anthropic/v1/models` - List available Anthropic models
+- `POST /anthropic/v1/messages` - Message completion with Claude format and streaming support
+- `POST /anthropic/v1/messages/count_tokens` - Token counting for Claude messages
+
+All responses conform to the Anthropic API specifications with proper SSE streaming format.
+
 ### Basic Usage
+
+#### Using OpenAI SDK
 
 ```python
 import openai
@@ -176,6 +215,26 @@ response = client.chat.completions.create(
     ]
 )
 print(response.choices[0].message.content)
+```
+
+#### Using Anthropic SDK
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(
+    api_key="any-key",  # Not used for local API
+    base_url="http://localhost:8000/anthropic"
+)
+
+response = client.messages.create(
+    model="claude-3-haiku-20240307",
+    messages=[
+        {"role": "user", "content": "Hello, world!"}
+    ],
+    max_tokens=1000
+)
+print(response.content[0].text)
 ```
 
 ### Tool Calling
@@ -245,10 +304,16 @@ curl http://localhost:8000/health
 # Run streaming regression tests
 ./streaming_regression_tests.sh
 
-# Test basic chat completion
+# Test OpenAI-compatible endpoint
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "claude-3-haiku", "messages": [{"role": "user", "content": "Hello"}]}'
+
+# Test Anthropic-compatible endpoint
+curl -X POST http://localhost:8000/anthropic/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{"model": "claude-3-haiku-20240307", "messages": [{"role": "user", "content": "Hello"}], "max_tokens": 1000}'
 ```
 
 ### Key Verification Points
@@ -341,9 +406,18 @@ CMD ["gunicorn", "-c", "config/gunicorn_config.py", "src.llm_endpoint_server:app
 
 For full model details and configuration, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#model-access--configuration)
 
+### OpenAI API Format
 - **Claude Models**: `claude-3-haiku`, `claude-3-sonnet`, `claude-3-opus`, `claude-4-sonnet`
 - **OpenAI Models**: `gpt-4`, `gpt-3.5-turbo`
 - **Google Models**: `gemini-pro`, `gemini-pro-vision`
+
+### Anthropic API Format
+- `claude-3-5-sonnet-latest`
+- `claude-3-haiku-20240307`
+- `claude-3-sonnet-20240229`
+- `claude-3-opus-20240229`
+
+These models are mapped to their equivalent Salesforce models automatically based on configuration in `config/anthropic_models.map.json`.
 
 *Note: Available models depend on your Salesforce org configuration and Einstein licensing.*
 

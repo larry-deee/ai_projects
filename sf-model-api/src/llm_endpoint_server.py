@@ -40,12 +40,26 @@ from streaming_architecture import (
     get_streaming_error_handler
 )
 
+# Import Anthropic native router for hardened pass-through
+from routers.anthropic_native import create_anthropic_router
+
 # Configure logging - reduce verbosity for cleaner output
 logging.basicConfig(level=logging.WARNING) # Changed from INFO to WARNING
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app) # Enable CORS for web applications
+
+# Register Anthropic native router for hardened pass-through
+try:
+    anthropic_bp = create_anthropic_router()
+    app.register_blueprint(anthropic_bp)
+    logger.info("✅ Anthropic native router registered at /anthropic")
+except ImportError as e:
+    logger.warning(f"⚠️  Anthropic native router disabled: {e}")
+    logger.warning("   Install httpx to enable: pip install httpx")
+except Exception as e:
+    logger.error(f"❌ Failed to register Anthropic native router: {e}")
 
 # Thread-safe client storage using thread-local storage
 thread_local = threading.local()
@@ -2108,7 +2122,9 @@ def root():
             "messages": "/v1/messages", 
             "completions": "/v1/completions",
             "health": "/health",
-            "performance_metrics": "/metrics/performance"
+            "performance_metrics": "/metrics/performance",
+            "anthropic_native_messages": "/anthropic/v1/messages",
+            "anthropic_native_health": "/anthropic/health"
         },
         "features": {
             "openai_compatible": True,
@@ -2217,6 +2233,13 @@ async def main():
         print("\n👋 Server stopped by user")
     except Exception as e:
         print(f"❌ Server error: {e}")
+    finally:
+        # Cleanup Anthropic native adapter resources
+        try:
+            from adapters.anthropic_native import shutdown_anthropic_adapter
+            asyncio.run(shutdown_anthropic_adapter())
+        except Exception as e:
+            print(f"⚠️  Error during Anthropic adapter cleanup: {e}")
 
 
 if __name__ == "__main__":
