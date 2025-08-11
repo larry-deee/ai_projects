@@ -35,6 +35,9 @@ log_error() {
 check_dependencies() {
     echo "🔍 Checking async dependencies..."
     
+    # Change to project root directory
+    cd "$(dirname "$0")"/.. 
+    
     if [ ! -f "$REQUIREMENTS_FILE" ]; then
         log_error "Requirements file not found: $REQUIREMENTS_FILE"
         exit 1
@@ -222,7 +225,7 @@ start_service() {
         echo "   • Model mapping: ${ANTHROPIC_MODEL_MAP:-config/anthropic_models.map.json}"
         echo "   • OpenAI front-door: $([ "$OPENAI_FRONTDOOR_ENABLED" = "1" ] && echo "✅ ENABLED" || echo "❌ DISABLED")"
         echo ""
-        cd src && exec python3 async_endpoint_server.py
+        exec python3 src/async_endpoint_server.py
     fi
 }
 
@@ -272,7 +275,7 @@ run_performance_test() {
         exit 1
     fi
     
-    cd src && python3 async_performance_benchmark.py
+    python3 src/async_performance_benchmark.py
 }
 
 # Main execution

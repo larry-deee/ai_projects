@@ -34,6 +34,9 @@ log_error() {
 check_dependencies() {
     echo "🔍 Checking dependencies..."
     
+    # Change to project root directory
+    cd "$(dirname "$0")"/.. 
+    
     if [ ! -f "$REQUIREMENTS_FILE" ]; then
         log_error "Requirements file not found: $REQUIREMENTS_FILE"
         exit 1

@@ -1,5 +1,29 @@
 # Changelog
 
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+- Comprehensive documentation consolidation and restructuring
+- Cross-references between documentation files
+- Streamlined README with improved readability
+- Updated CLAUDE.md to focus on AI agent communication protocol
+
+### Changed
+- Simplified documentation structure in root directory
+- Improved navigation and cross-referencing in documentation
+- Enhanced project overview in README.md
+- Refactored CLAUDE.md to be protocol-focused
+
+### Documentation
+- Created clear index of documentation resources
+- Added more concise and targeted explanations
+- Improved formatting and markdown consistency
+
 ## [Unreleased] - OpenAI Front-Door & Backend Adapters
 
 ### Added
@@ -24,17 +48,6 @@
 - `MODEL_CAPABILITIES_JSON="{...}"` - Override model capabilities via JSON
 - `MODEL_CAPABILITIES_FILE=config/models.yml` - Model config file path
 - `OPENAI_PARSER_FALLBACK=0` - Legacy parser (disabled by default)
-
-### Migration
-Migration to the new architecture is straightforward:
-1. Set `OPENAI_FRONTDOOR_ENABLED=1` in your environment
-2. No changes needed to existing API calls or client applications
-3. All existing functionality is preserved with enhanced compatibility
-
-### Rollback
-If needed, the system can be rolled back to the previous architecture:
-1. Set `OPENAI_FRONTDOOR_ENABLED=0` in your environment
-2. Or remove the environment variable completely (defaults to disabled)
 
 ## [1.2.0] - 2025-07-15
 

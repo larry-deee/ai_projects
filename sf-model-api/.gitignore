@@ -79,3 +79,6 @@ $RECYCLE.BIN/
 # Custom project specific
 development-environment-setup.md
 performance-optimization-analysis.md
+
+# Agent coordination (local development only)
+sub-agents/
