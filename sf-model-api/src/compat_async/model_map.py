@@ -42,7 +42,7 @@ _cache_ttl = 300  # 5 minutes cache TTL
 
 async def load_anthropic_model_config() -> List[Dict[str, Any]]:
     """
-    Load Anthropic model configuration from anthropic_models.map.json.
+    Load Anthropic model configuration using unified configuration manager.
     
     Loads the configuration file that maps Anthropic model IDs to Salesforce
     model IDs with capability metadata.
@@ -53,6 +53,37 @@ async def load_anthropic_model_config() -> List[Dict[str, Any]]:
     Raises:
         FileNotFoundError: If configuration file is not found
         json.JSONDecodeError: If configuration file is invalid JSON
+    """
+    try:
+        # Try to use the unified configuration manager
+        from config_manager import get_config_manager
+        config_manager = get_config_manager()
+        model_config = await config_manager.get_model_mappings_async()
+        
+        # Extract models list from the configuration structure
+        if isinstance(model_config, dict) and 'models' in model_config:
+            logger.info("✅ Loaded Anthropic model config from unified configuration manager")
+            return model_config['models']
+        elif isinstance(model_config, list):
+            logger.info("✅ Loaded Anthropic model config from unified configuration manager")
+            return model_config
+        else:
+            logger.warning("⚠️ Invalid model config structure, using default configuration")
+            return _get_default_model_config()
+            
+    except ImportError:
+        # Fallback to original loading method for backward compatibility
+        logger.debug("ConfigManager not available, using fallback loading")
+        return await _load_anthropic_model_config_fallback()
+    except Exception as e:
+        logger.error(f"❌ Failed to load model config from ConfigManager: {e}")
+        return await _load_anthropic_model_config_fallback()
+
+async def _load_anthropic_model_config_fallback() -> List[Dict[str, Any]]:
+    """
+    Fallback method for loading Anthropic model configuration.
+    
+    This maintains the original loading logic for backward compatibility.
     """
     # Check for config file in multiple locations
     config_paths = [
@@ -77,8 +108,17 @@ async def load_anthropic_model_config() -> List[Dict[str, Any]]:
         with open(config_path, 'r') as f:
             config = json.load(f)
         
+        # Handle both old format (list) and new format (dict with models key)
+        if isinstance(config, dict) and 'models' in config:
+            models = config['models']
+        elif isinstance(config, list):
+            models = config
+        else:
+            logger.warning("⚠️ Invalid config format, using default configuration")
+            return _get_default_model_config()
+        
         logger.info(f"✅ Loaded Anthropic model config from: {config_path}")
-        return config
+        return models
         
     except (json.JSONDecodeError, IOError) as e:
         logger.error(f"❌ Failed to load Anthropic model config: {e}")

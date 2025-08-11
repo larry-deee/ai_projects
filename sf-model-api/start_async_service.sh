@@ -169,6 +169,11 @@ start_service() {
         export N8N_COMPAT_PRESERVE_TOOLS="${N8N_COMPAT_PRESERVE_TOOLS:-1}"
         export OPENAI_NATIVE_TOOL_PASSTHROUGH="${OPENAI_NATIVE_TOOL_PASSTHROUGH:-1}"
         
+        # Anthropic compatibility configuration
+        export NATIVE_ANTHROPIC_ENABLED="${NATIVE_ANTHROPIC_ENABLED:-false}"
+        export ANTHROPIC_MODEL_MAP="${ANTHROPIC_MODEL_MAP:-config/anthropic_models.map.json}"
+        export OPENAI_FRONTDOOR_ENABLED="${OPENAI_FRONTDOOR_ENABLED:-0}"
+        
         # Production: start with optimized async gunicorn config
         $GUNICORN_CMD src.async_endpoint_server:app --daemon
         
@@ -195,6 +200,11 @@ start_service() {
         export N8N_COMPAT_PRESERVE_TOOLS="${N8N_COMPAT_PRESERVE_TOOLS:-1}"
         export OPENAI_NATIVE_TOOL_PASSTHROUGH="${OPENAI_NATIVE_TOOL_PASSTHROUGH:-1}"
         
+        # Anthropic compatibility configuration
+        export NATIVE_ANTHROPIC_ENABLED="${NATIVE_ANTHROPIC_ENABLED:-false}"
+        export ANTHROPIC_MODEL_MAP="${ANTHROPIC_MODEL_MAP:-config/anthropic_models.map.json}"
+        export OPENAI_FRONTDOOR_ENABLED="${OPENAI_FRONTDOOR_ENABLED:-0}"
+        
         echo "🎯 Features enabled:"
         echo "   • Connection pooling (20-30% improvement)"
         echo "   • Async architecture (40-60% improvement)"
@@ -205,6 +215,12 @@ start_service() {
         echo "   • OpenAI-native passthrough: $([ "$OPENAI_NATIVE_TOOL_PASSTHROUGH" = "1" ] && echo "✅ ENABLED" || echo "❌ DISABLED")"
         echo "   • Verbose tool logs: $([ "$VERBOSE_TOOL_LOGS" = "1" ] && echo "✅ ENABLED" || echo "❌ DISABLED")"
         echo "   • Response debug: $([ "$SF_RESPONSE_DEBUG" = "true" ] && echo "✅ ENABLED" || echo "❌ DISABLED")"
+        echo ""
+        echo "🤖 Anthropic compatibility:"
+        echo "   • Anthropic API endpoints: ✅ AVAILABLE at /anthropic/v1/*"
+        echo "   • Legacy native router: $([ "$NATIVE_ANTHROPIC_ENABLED" = "true" ] && echo "✅ ENABLED" || echo "❌ DISABLED")"
+        echo "   • Model mapping: ${ANTHROPIC_MODEL_MAP:-config/anthropic_models.map.json}"
+        echo "   • OpenAI front-door: $([ "$OPENAI_FRONTDOOR_ENABLED" = "1" ] && echo "✅ ENABLED" || echo "❌ DISABLED")"
         echo ""
         cd src && exec python3 async_endpoint_server.py
     fi
@@ -301,6 +317,11 @@ main() {
             echo "    VERBOSE_TOOL_LOGS=1|0               - Enable detailed tool calling logs (default: 0)"
             echo "    N8N_COMPAT_PRESERVE_TOOLS=1|0       - Preserve tools for n8n clients (default: 1)"
             echo "    OPENAI_NATIVE_TOOL_PASSTHROUGH=1|0  - Enable OpenAI-native model passthrough (default: 1)"
+            echo ""
+            echo "  Anthropic compatibility:"
+            echo "    NATIVE_ANTHROPIC_ENABLED=true|false - Enable legacy Anthropic native router (default: false)"
+            echo "    ANTHROPIC_MODEL_MAP=path            - Path to Anthropic model mapping file"
+            echo "    OPENAI_FRONTDOOR_ENABLED=1|0        - Enable new OpenAI front-door architecture (default: 0)"
             echo ""
             echo "  Commands:"
             echo "    start   - Start the async service"

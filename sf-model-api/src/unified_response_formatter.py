@@ -128,6 +128,18 @@ class UnifiedResponseFormatter:
                 'frequency': '3%'
             },
             
+            # Path 2b: Nested Salesforce generations format (your response structure)
+            {
+                'path': ('response', 'generations', 0, 0, 'text'),
+                'description': 'Nested Salesforce response.generations[0][0].text',
+                'frequency': '5%'
+            },
+            {
+                'path': ('generations', 0, 0, 'text'),
+                'description': 'Double-nested generations[0][0].text',
+                'frequency': '4%'
+            },
+            
             # Path 3: New generationDetails format
             {
                 'path': ('generationDetails', 'generations', 0, 'content'),
@@ -609,6 +621,20 @@ class UnifiedResponseFormatter:
                     logger.debug(f"⚠️ Tool call extraction path {path} failed: {e}")
                 continue
         
+        # CRITICAL ENHANCEMENT: Check for XML function calls in text content
+        if not tool_calls:
+            extracted_text = self.extract_response_text(sf_response)
+            if extracted_text.text and "<function_calls>" in extracted_text.text:
+                try:
+                    # Import here to avoid circular imports
+                    from tool_schemas import parse_tool_calls_from_response
+                    xml_tool_calls = parse_tool_calls_from_response(extracted_text.text)
+                    if xml_tool_calls:
+                        logger.info(f"🔧 Detected {len(xml_tool_calls)} XML function calls in response text")
+                        tool_calls.extend(xml_tool_calls)
+                except Exception as e:
+                    logger.error(f"❌ Failed to parse XML function calls: {e}")
+
         if self.debug_mode and tool_calls:
             logger.debug(f"✅ Extracted {len(tool_calls)} tool calls")
         

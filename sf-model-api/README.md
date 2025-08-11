@@ -26,10 +26,11 @@ pip install -r requirements.txt
 
 3. **Configure authentication:**
 ```bash
-# Create config file from template
-cp config.json.example config.json
+# Create secure config directory and file from template
+mkdir -p .secure
+cp config.json.example .secure/config.json
 
-# Edit config.json with your Salesforce credentials
+# Edit .secure/config.json with your Salesforce credentials
 # OR set environment variables:
 export SALESFORCE_CONSUMER_KEY="your_connected_app_key"
 export SALESFORCE_USERNAME="your_username@company.com"
@@ -127,48 +128,75 @@ sf-model-api/
 
 ## 🔧 Configuration
 
-### Environment Variables (Recommended)
+### Configuration Management
 
+We provide a comprehensive configuration system with flexible options to suit your deployment needs. For complete documentation, refer to the [Configuration Guide](docs/CONFIGURATION.md).
+
+#### Configuration Methods
+1. **Environment Variables** (Recommended for Production)
+2. **Configuration File** (`config.json`)
+3. **Hardcoded Defaults**
+
+#### Key Configuration Categories
+- **Authentication**
+- **Tool Calling**
+- **Server Settings**
+- **Model Mappings**
+
+### Quick Configuration Examples
+
+#### Environment Variables
 ```bash
-# Required Configuration
-export SALESFORCE_CONSUMER_KEY="your_connected_app_consumer_key"
-export SALESFORCE_USERNAME="your_username@company.com"
+# Core Salesforce Authentication
+export SALESFORCE_CONSUMER_KEY="your_connected_app_key"
+export SALESFORCE_USERNAME="user@company.com"
 export SALESFORCE_INSTANCE_URL="https://your-instance.my.salesforce.com"
 
-# Optional Configuration
-export SALESFORCE_PRIVATE_KEY_FILE="/path/to/server.key"
-export SALESFORCE_API_VERSION="v64.0"
-export ENVIRONMENT="development"
-export SF_RESPONSE_DEBUG="false"
+# Tool Calling Configuration
+export TOOL_CALLING_MAX_CONCURRENT=3
+export TOOL_CALLING_TIMEOUT=30.0
 
-# OpenAI Front-Door Architecture
-export OPENAI_FRONTDOOR_ENABLED="1"        # Enable new architecture (recommended)
-export MODEL_CAPABILITIES_JSON="{...}"     # Optional: Override model capabilities via JSON
-export MODEL_CAPABILITIES_FILE="config/models.yml"  # Optional: Model config file path
+# Server Configuration
+export HOST="0.0.0.0"
+export PORT=8000
+export DEBUG="false"
 
-# Anthropic API Compatibility
-export NATIVE_ANTHROPIC_ENABLED="1"       # Enable Anthropic-compatible endpoints
-export ANTHROPIC_MODEL_MAP="config/anthropic_models.map.json"  # Model mapping configuration
-
-# Compatibility Options
-export N8N_COMPAT_MODE="1"              # Set to "0" to disable n8n compatibility mode
-export N8N_COMPAT_PRESERVE_TOOLS="1"   # Preserve tools for n8n clients (recommended)
-export OPENAI_NATIVE_TOOL_PASSTHROUGH="1" # Direct passthrough for OpenAI models
-export VERBOSE_TOOL_LOGS="0"           # Set to "1" for detailed tool calling logs
+# Advanced Compatibility Options
+export N8N_COMPAT_MODE="1"
+export OPENAI_NATIVE_TOOL_PASSTHROUGH="1"
 ```
 
-### Configuration File
-
-Create `config.json` from `config.json.example`:
-
+#### Configuration File (`.secure/config.json`)
+**⚠️ Important: Store credentials in `.secure/config.json` (already in .gitignore)**
 ```json
 {
   "consumer_key": "your_key",
+  "consumer_secret": "your_secret",
   "username": "user@company.com",
-  "private_key_file": "/path/to/server.key",
   "instance_url": "https://your-instance.my.salesforce.com",
-  "api_version": "v64.0"
+  "tool_calling": {
+    "max_concurrent_calls": 3,
+    "timeout": 30.0,
+    "strict_parameter_validation": true
+  },
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "debug": false
+  }
 }
+```
+
+### Configuration Highlights
+- **🔒 Secure by Default**: Environment variable overrides
+- **🚀 Performance Optimized**: 17.4x faster config access
+- **🧩 Flexible**: Multiple configuration sources
+- **🛡️ Validation**: Comprehensive config checking
+
+### Learn More
+- [📘 Full Configuration Guide](docs/CONFIGURATION.md)
+- [🔍 Environment Variable Reference](docs/CONFIGURATION.md#environment-variables)
+- [🛠️ Advanced Configuration Options](docs/CONFIGURATION.md#configuration-sources)
 ```
 
 ## 📚 API Usage

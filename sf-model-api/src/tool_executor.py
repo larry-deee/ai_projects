@@ -289,119 +289,151 @@ class ToolExecutor:
                 return f"Error reading file: {str(e)}"
  
         # Register built-in functions with their definitions
-        from tool_schemas import FunctionDefinition, ParameterSchema, FunctionParameterType
+        from tool_schemas import FunctionDefinition, ParameterSchema, FunctionParameterType, FunctionParameters
         
         builtin_functions = [
             (calculate, FunctionDefinition(
                 name="calculate",
                 description="Evaluate a mathematical expression",
-                parameters={
-                    "expression": ParameterSchema(
-                        type=FunctionParameterType.STRING,
-                        description="Mathematical expression to evaluate"
-                    )
-                }
+                parameters=FunctionParameters(
+                    type="object",
+                    properties={
+                        "expression": ParameterSchema(
+                            type=FunctionParameterType.STRING,
+                            description="Mathematical expression to evaluate"
+                        )
+                    },
+                    required=["expression"]
+                )
             )),
             (get_current_time, FunctionDefinition(
                 name="get_current_time",
                 description="Get current time in specified format",
-                parameters={
-                    "format_str": ParameterSchema(
-                        type=FunctionParameterType.STRING,
-                        description="Time format string (default: %Y-%m-%d %H:%M:%S)",
-                        default="%Y-%m-%d %H:%M:%S"
-                    )
-                }
+                parameters=FunctionParameters(
+                    type="object",
+                    properties={
+                        "format_str": ParameterSchema(
+                            type=FunctionParameterType.STRING,
+                            description="Time format string (default: %Y-%m-%d %H:%M:%S)",
+                            default="%Y-%m-%d %H:%M:%S"
+                        )
+                    },
+                    required=[]
+                )
             )),
             (get_weather, FunctionDefinition(
                 name="get_weather",
                 description="Get weather information for a location",
-                parameters={
-                    "location": ParameterSchema(
-                        type=FunctionParameterType.STRING,
-                        description="Location name (e.g., 'New York')"
-                    ),
-                    "units": ParameterSchema(
-                        type=FunctionParameterType.STRING,
-                        description="Units - 'metric' or 'imperial' (default: 'metric')",
-                        default="metric",
-                        enum=["metric", "imperial"]
-                    )
-                }
+                parameters=FunctionParameters(
+                    type="object",
+                    properties={
+                        "location": ParameterSchema(
+                            type=FunctionParameterType.STRING,
+                            description="Location name (e.g., 'New York')"
+                        ),
+                        "units": ParameterSchema(
+                            type=FunctionParameterType.STRING,
+                            description="Units - 'metric' or 'imperial' (default: 'metric')",
+                            default="metric",
+                            enum=["metric", "imperial"]
+                        )
+                    },
+                    required=["location"]
+                )
             )),
             (search_web, FunctionDefinition(
                 name="search_web",
                 description="Search the web for information",
-                parameters={
-                    "query": ParameterSchema(
-                        type=FunctionParameterType.STRING,
-                        description="Search query"
-                    ),
-                    "max_results": ParameterSchema(
-                        type=FunctionParameterType.INTEGER,
-                        description="Maximum number of results (default: 5, max: 10)",
-                        default=5,
-                        minimum=1,
-                        maximum=10
-                    )
-                }
+                parameters=FunctionParameters(
+                    type="object",
+                    properties={
+                        "query": ParameterSchema(
+                            type=FunctionParameterType.STRING,
+                            description="Search query"
+                        ),
+                        "max_results": ParameterSchema(
+                            type=FunctionParameterType.INTEGER,
+                            description="Maximum number of results (default: 5, max: 10)",
+                            default=5,
+                            minimum=1,
+                            maximum=10
+                        )
+                    },
+                    required=["query"]
+                )
             )),
             (wikipedia_api, FunctionDefinition(
                 name="wikipedia-api",
                 description="Search Wikipedia for information",
-                parameters={
-                    "query": ParameterSchema(
-                        type=FunctionParameterType.STRING,
-                        description="Search query for Wikipedia"
-                    ),
-                    "language": ParameterSchema(
-                        type=FunctionParameterType.STRING,
-                        description="Language code (e.g., 'en', 'es', 'fr') (default: 'en')",
-                        default="en"
-                    )
-                }
+                parameters=FunctionParameters(
+                    type="object",
+                    properties={
+                        "query": ParameterSchema(
+                            type=FunctionParameterType.STRING,
+                            description="Search query for Wikipedia"
+                        ),
+                        "language": ParameterSchema(
+                            type=FunctionParameterType.STRING,
+                            description="Language code (e.g., 'en', 'es', 'fr') (default: 'en')",
+                            default="en"
+                        )
+                    },
+                    required=["query"]
+                )
             )),
             (send_email, FunctionDefinition(
                 name="send_email",
                 description="Send an email (simulated)",
-                parameters={
-                    "to": ParameterSchema(
-                        type=FunctionParameterType.STRING,
-                        description="Recipient email address"
-                    ),
-                    "subject": ParameterSchema(
-                        type=FunctionParameterType.STRING,
-                        description="Email subject"
-                    ),
-                    "body": ParameterSchema(
-                        type=FunctionParameterType.STRING,
-                        description="Email body content"
-                    )
-                }
+                parameters=FunctionParameters(
+                    type="object",
+                    properties={
+                        "to": ParameterSchema(
+                            type=FunctionParameterType.STRING,
+                            description="Recipient email address"
+                        ),
+                        "subject": ParameterSchema(
+                            type=FunctionParameterType.STRING,
+                            description="Email subject"
+                        ),
+                        "body": ParameterSchema(
+                            type=FunctionParameterType.STRING,
+                            description="Email body content"
+                        )
+                    },
+                    required=["to", "subject", "body"]
+                )
             )),
             (create_file, FunctionDefinition(
                 name="create_file",
                 description="Create a new file with content",
-                parameters={
-                    "filename": ParameterSchema(
-                        type=FunctionParameterType.STRING,
-                        description="Name of the file to create"
-                    ),
-                    "content": ParameterSchema(
-                        type=FunctionParameterType.STRING,
-                        description="Content to write to the file"
-                    )
-                }
+                parameters=FunctionParameters(
+                    type="object",
+                    properties={
+                        "filename": ParameterSchema(
+                            type=FunctionParameterType.STRING,
+                            description="Name of the file to create"
+                        ),
+                        "content": ParameterSchema(
+                            type=FunctionParameterType.STRING,
+                            description="Content to write to the file"
+                        )
+                    },
+                    required=["filename", "content"]
+                )
             )),
             (read_file, FunctionDefinition(
                 name="read_file",
                 description="Read contents of a file",
-                parameters={
-                    "filename": ParameterSchema(
-                        type=FunctionParameterType.STRING,
-                        description="Name of the file to read"
-                    )
-                }
+                parameters=FunctionParameters(
+                    type="object",
+                    properties={
+                        "filename": ParameterSchema(
+                            type=FunctionParameterType.STRING,
+                            description="Name of the file to read"
+                        )
+                    },
+                    required=["filename"]
+                )
             ))
         ]
         
@@ -479,17 +511,20 @@ class ToolExecutor:
                 # Create a minimal definition for argument validation
                 definition = self._create_minimal_definition(function_name, arguments)
             
+            # Apply parameter name mapping before validation
+            mapped_args = self._apply_parameter_mapping(function_name, arguments)
+            
             # Validate arguments if strict validation is enabled
             if self.config.strict_parameter_validation:
                 try:
                     from tool_schemas import validate_tool_arguments
-                    validated_args = validate_tool_arguments(definition, arguments)
+                    validated_args = validate_tool_arguments(definition, mapped_args)
                 except Exception as validation_error:
                     logger.warning(f"Argument validation failed for {function_name}: {validation_error}")
-                    # For OpenAI compatibility, we can continue with original arguments
-                    validated_args = arguments
+                    # For OpenAI compatibility, we can continue with mapped arguments
+                    validated_args = mapped_args
             else:
-                validated_args = arguments
+                validated_args = mapped_args
             
             # Execute with timeout
             future = self.executor.submit(function, **validated_args)
@@ -552,6 +587,116 @@ class ToolExecutor:
             description=f"Function {function_name}",
             parameters=properties
         )
+
+    def _apply_parameter_mapping(self, function_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Apply parameter name mapping to handle common parameter name variations.
+        
+        This method handles cases where different models or clients use different
+        parameter names for the same conceptual parameters (e.g., 'input' vs 'query').
+        
+        Args:
+            function_name: Name of the function being called
+            arguments: Original arguments dictionary
+            
+        Returns:
+            Dictionary with mapped parameter names
+        """
+        # Define parameter mappings for built-in functions
+        parameter_mappings = {
+            'wikipedia-api': {
+                'input': 'query',        # Common: model returns 'input' but function expects 'query'
+                'search': 'query',       # Common: some models use 'search' instead of 'query'  
+                'term': 'query',         # Common: some models use 'term' instead of 'query'
+                'text': 'query',         # Common: some models use 'text' instead of 'query'
+                'prompt': 'query',       # Anthropic: some Anthropic models use 'prompt'
+                'content': 'query',      # Anthropic: some Anthropic models use 'content'
+                'message': 'query',      # Anthropic: some Anthropic models use 'message'
+            },
+            'wikipedia_api': {  # Handle underscore variant
+                'input': 'query',
+                'search': 'query',
+                'term': 'query',
+                'text': 'query',
+                'prompt': 'query',
+                'content': 'query',
+                'message': 'query',
+            },
+            'Wikipedia_API': {  # Handle capitalized variant
+                'input': 'query',
+                'search': 'query', 
+                'term': 'query',
+                'text': 'query',
+                'prompt': 'query',
+                'content': 'query',
+                'message': 'query',
+            },
+            'search_web': {
+                'input': 'query',
+                'search': 'query',
+                'term': 'query',
+                'text': 'query',
+                'prompt': 'query',
+                'content': 'query',
+                'message': 'query',
+            },
+            'get_weather': {
+                'place': 'location',
+                'city': 'location',
+                'address': 'location',
+            },
+            'calculate': {
+                'formula': 'expression',
+                'equation': 'expression',
+                'calc': 'expression',
+                'math': 'expression',
+            },
+            'create_file': {
+                'file': 'filename',
+                'path': 'filename',
+                'name': 'filename',
+                'text': 'content',
+                'data': 'content',
+                'body': 'content',
+            },
+            'read_file': {
+                'file': 'filename',
+                'path': 'filename',
+                'name': 'filename',
+            },
+            'send_email': {
+                'email': 'to',
+                'recipient': 'to',
+                'address': 'to',
+                'title': 'subject',
+                'header': 'subject',
+                'content': 'body',
+                'message': 'body',
+                'text': 'body',
+            }
+        }
+        
+        # Get mapping for this function
+        function_mappings = parameter_mappings.get(function_name, {})
+        
+        if not function_mappings:
+            # No mappings defined for this function, return original arguments
+            return arguments.copy()
+        
+        # Apply mappings
+        mapped_args = arguments.copy()
+        mappings_applied = []
+        
+        for original_param, new_param in function_mappings.items():
+            if original_param in mapped_args and new_param not in mapped_args:
+                # Move the value from original parameter name to new parameter name
+                mapped_args[new_param] = mapped_args.pop(original_param)
+                mappings_applied.append(f"{original_param} -> {new_param}")
+        
+        if mappings_applied:
+            logger.info(f"Applied parameter mappings for {function_name}: {', '.join(mappings_applied)}")
+        
+        return mapped_args
  
     def execute_tools_parallel(self, tool_calls: List[ToolCall]) -> List[ToolResponse]:
         """

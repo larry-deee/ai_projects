@@ -1,0 +1,75 @@
+{
+  "version": "1.0",
+  "description": "Anthropic model mapping configuration for Salesforce Models API Gateway",
+  "models": [
+    {
+      "id": "claude-3-haiku-20240307",
+      "object": "model",
+      "created": 1709769600,
+      "owned_by": "anthropic",
+      "display_name": "Claude 3 Haiku",
+      "description": "Fast and efficient model for everyday tasks",
+      "salesforce_model_id": "sfdc_ai__DefaultBedrockAnthropicClaude3Haiku",
+      "max_tokens": 4096,
+      "input_tokens": 200000,
+      "capabilities": {
+        "text_generation": true,
+        "tool_calling": true,
+        "streaming": true,
+        "function_calling": true
+      }
+    },
+    {
+      "id": "claude-3-sonnet-20240229",
+      "object": "model", 
+      "created": 1709164800,
+      "owned_by": "anthropic",
+      "display_name": "Claude 3 Sonnet",
+      "description": "Balanced model for complex reasoning and analysis",
+      "salesforce_model_id": "sfdc_ai__DefaultBedrockAnthropicClaude37Sonnet",
+      "max_tokens": 4096,
+      "input_tokens": 200000,
+      "capabilities": {
+        "text_generation": true,
+        "tool_calling": true,
+        "streaming": true,
+        "function_calling": true
+      }
+    },
+    {
+      "id": "claude-3-opus-20240229",
+      "object": "model",
+      "created": 1709164800,
+      "owned_by": "anthropic", 
+      "display_name": "Claude 3 Opus",
+      "description": "Most capable model for complex tasks",
+      "salesforce_model_id": "sfdc_ai__DefaultBedrockAnthropicClaude4Sonnet",
+      "max_tokens": 4096,
+      "input_tokens": 200000,
+      "capabilities": {
+        "text_generation": true,
+        "tool_calling": true,
+        "streaming": true,
+        "function_calling": true
+      }
+    },
+    {
+      "id": "claude-3-5-sonnet-latest",
+      "object": "model",
+      "created": 1719792000,
+      "owned_by": "anthropic",
+      "display_name": "Claude 3.5 Sonnet",
+      "description": "Latest and most advanced Claude model",
+      "salesforce_model_id": "sfdc_ai__DefaultBedrockAnthropicClaude37Sonnet",
+      "max_tokens": 4096,
+      "input_tokens": 200000,
+      "capabilities": {
+        "text_generation": true,
+        "tool_calling": true,
+        "streaming": true,
+        "function_calling": true
+      }
+    }
+  ]
+}
+EOF < /dev/null

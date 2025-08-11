@@ -20,13 +20,24 @@ from salesforce_models_client import SalesforceModelsClient
 
 
 def get_config_path(args):
-    """Auto-detect config.json if no config specified."""
+    """Auto-detect config.json if no config specified (backward compatibility)."""
     config_path = args.config
     if not config_path:
-        if os.path.exists('config.json'):
-            config_path = 'config.json'
-        elif os.path.exists('../config.json'):
-            config_path = '../config.json'
+        # Use unified configuration manager for path resolution
+        try:
+            from config_manager import get_config_manager
+            # ConfigManager handles path resolution internally
+            return None  # Let ConfigManager handle the path resolution
+        except ImportError:
+            # Fallback to original path detection
+            if os.path.exists('.secure/config.json'):
+                config_path = '.secure/config.json'
+            elif os.path.exists('../.secure/config.json'):
+                config_path = '../.secure/config.json'
+            elif os.path.exists('config.json'):
+                config_path = 'config.json'
+            elif os.path.exists('../config.json'):
+                config_path = '../config.json'
     return config_path
 
 

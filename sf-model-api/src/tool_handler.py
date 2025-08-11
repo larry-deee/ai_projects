@@ -946,9 +946,31 @@ class ToolCallingHandler:
             
             for call_dict in tool_call_dicts:
                 try:
-                    # Extract function name and arguments
-                    function_name = call_dict.get('name', '')
-                    function_args = call_dict.get('arguments', {})
+                    # CRITICAL FIX: Extract function name and arguments from both formats
+                    # Handle OpenAI-compliant format: {"id": "...", "type": "function", "function": {"name": "...", "arguments": "..."}}
+                    # Handle legacy format: {"name": "...", "arguments": {...}}
+                    
+                    if 'function' in call_dict and isinstance(call_dict['function'], dict):
+                        # OpenAI-compliant format (new)
+                        function_obj = call_dict['function']
+                        function_name = function_obj.get('name', '')
+                        function_args = function_obj.get('arguments', {})
+                        
+                        # CRITICAL FIX: Parse arguments if they're a JSON string (OpenAI format)
+                        if isinstance(function_args, str):
+                            try:
+                                function_args = json.loads(function_args)
+                                logger.debug(f"Parsed JSON arguments: {function_args}")
+                            except json.JSONDecodeError as e:
+                                logger.warning(f"Failed to parse arguments JSON: {e}, using empty dict")
+                                function_args = {}
+                        
+                        logger.debug(f"Extracted from OpenAI format: name='{function_name}', args type={type(function_args)}")
+                    else:
+                        # Legacy format (old) - fallback for backward compatibility
+                        function_name = call_dict.get('name', '')
+                        function_args = call_dict.get('arguments', {})
+                        logger.debug(f"Extracted from legacy format: name='{function_name}', args type={type(function_args)}")
                     
                     if not function_name:
                         # VERBOSE_TOOL_LOGS: Check if we should demote this warning to debug level

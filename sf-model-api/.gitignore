@@ -2,13 +2,18 @@
 
 # Configuration and Credentials
 config.json
+.secure/
 **/salesforce_models_token.json
 *.token.json
 *.env
-.env
+.env*
+!.env.example
 *.pem
 *.key
 *.cer
+**/secrets.*
+**/credentials.*
+**/auth.*
 
 # Python
 __pycache__/

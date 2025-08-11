@@ -125,12 +125,57 @@ python -m memory_profiler llm_endpoint_server.py
 4. **Regex Compilation:** Cache regex patterns instead of recompiling
 5. **Response Path Explosion:** Use efficient single-path response extraction
 
-### Configuration Guidelines
-- **Token Cache TTL:** Set to 30+ minutes for optimal performance
-- **Conversation State:** Limit to 50 messages max for memory efficiency
-- **Timeout Parameters:** Use adaptive timeouts based on request size
-- **Thread Pool Size:** Monitor and adjust based on concurrency patterns
-- **Logging Level:** Use WARNING or higher in production to reduce I/O
+### Configuration Guidelines: Unified Configuration Management
+
+#### Key Configuration Principles
+- **Primary Configuration Source:** `config.json` with comprehensive environment variable overrides
+- **Performance Optimized:** 17.4x faster configuration access with intelligent caching
+- **Secure Design:** Credentials should NEVER be hardcoded, always use environment variables
+
+#### Configuration Layers (Priority Order)
+1. Environment Variables (Highest Priority)
+2. `config.json` Configuration File
+3. Hardcoded Default Values (Lowest Priority)
+
+#### Configuration Categories
+- **Salesforce Authentication**
+  - Credentials MUST be set via environment variables
+  - Required: `SALESFORCE_CONSUMER_KEY`, `SALESFORCE_CONSUMER_SECRET`, `SALESFORCE_INSTANCE_URL`
+  
+- **Tool Calling Configuration**
+  - `tool_calling` section in config supports granular control
+  - Environment Variable Overrides:
+    - `TOOL_CALLING_ALLOW_DANGEROUS_FUNCTIONS` (bool)
+    - `TOOL_CALLING_STRICT_VALIDATION` (bool)
+    - `TOOL_CALLING_MAX_CONCURRENT` (int)
+    - `TOOL_CALLING_TIMEOUT` (float)
+
+- **Server Configuration**
+  - Supports runtime environment customization
+  - Key Environment Variables:
+    - `HOST`: Server bind address
+    - `PORT`: Server port
+    - `DEBUG`: Enable debug mode
+    - `ENVIRONMENT`: Deployment environment context
+    - `MAX_WORKER_MEMORY`: Memory limit per worker
+    - `VERBOSE_TOOL_LOGS`: Detailed tool execution logging
+
+- **Performance Tuning**
+  - **Configuration Caching:** Automatic 5-minute TTL with intelligent refresh
+  - **Conversation State:** Limit to 50 messages max for memory efficiency
+  - **Adaptive Timeouts:** Configurable tool call timeouts
+  - **Thread Safety:** Thread-safe configuration access
+
+#### Security Best Practices
+- Never commit sensitive credentials to version control
+- Use `.env` files for local development
+- Rotate credentials regularly
+- Use secret management services in production environments
+
+#### Logging & Monitoring
+- Default Logging Level: WARNING
+- Use environment variables to adjust logging verbosity
+- Cache statistics available via `get_cache_stats()`
 
 ## 1. The Prime Directive: You Are a Dispatcher
 

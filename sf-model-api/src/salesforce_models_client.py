@@ -240,7 +240,15 @@ class AsyncSalesforceModelsClient:
     Asynchronous client for Salesforce Einstein Trust Layer Models API.
     """
     def __init__(self, config_file: Optional[str] = None):
-        self.config = self._load_config(config_file)
+        # Try to use the unified configuration manager if available
+        try:
+            from config_manager import get_config_manager
+            config_manager = get_config_manager(config_file)
+            self.config = config_manager.get_salesforce_config()
+        except ImportError:
+            # Fallback to original config loading for backward compatibility
+            self.config = self._load_config(config_file)
+        
         self.token_file = self.config.get('token_file', 'salesforce_models_token.json')
     
     def _load_config(self, config_file: Optional[str] = None) -> Dict[str, str]:

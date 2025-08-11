@@ -485,13 +485,23 @@ def initialize_global_config():
  
     try:
         # Try config file first, then environment variables (None = use env vars)
-        # Look for config.json in current directory first, then parent directory
-        if os.path.exists('config.json'):
-            config_file = 'config.json'
-        elif os.path.exists('../config.json'):
-            config_file = '../config.json'
-        else:
-            config_file = None
+        # Use unified configuration manager for config file resolution
+        try:
+            from config_manager import get_config_manager
+            # ConfigManager handles path resolution internally
+            config_file = None  # Let ConfigManager handle the resolution
+        except ImportError:
+            # Fallback to original path detection for backward compatibility
+            if os.path.exists('.secure/config.json'):
+                config_file = '.secure/config.json'
+            elif os.path.exists('../.secure/config.json'):
+                config_file = '../.secure/config.json'
+            elif os.path.exists('config.json'):
+                config_file = 'config.json'
+            elif os.path.exists('../config.json'):
+                config_file = '../config.json'
+            else:
+                config_file = None
         client_config = config_file # Store the config path (can be None)
  
         # Use the synchronous client for this startup check to avoid async issues in gunicorn hooks

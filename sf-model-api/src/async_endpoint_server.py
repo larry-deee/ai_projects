@@ -36,11 +36,13 @@ from quart import Quart, request, jsonify, Response
 from quart_cors import cors
 from salesforce_models_client import AsyncSalesforceModelsClient
 from connection_pool import get_connection_pool
+from config_manager import get_config_manager, get_config_async, get_salesforce_config_async
 from tool_schemas import (
     ToolCallingConfig,
     validate_tool_definitions,
     validate_anthropic_tool_definitions,
     convert_openai_to_anthropic_tools,
+    convert_anthropic_to_openai_tools,
     validate_tools_with_format,
     detect_tool_format,
     ToolCallingValidationError,
@@ -73,7 +75,7 @@ from streaming_architecture import (
 from unified_response_formatter import UnifiedResponseFormatter
 
 # Configure logging
-logging.basicConfig(level=logging.WARNING)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Create Quart app with async support
@@ -210,30 +212,23 @@ class AsyncClientManager:
 
 async def resolve_config_path(config_file: str = 'config.json') -> str:
     """
-    Resolve config.json path robustly by checking multiple locations.
+    Resolve config.json path using unified configuration manager.
     
     Args:
         config_file: Base config file name or path
         
     Returns:
         str: Resolved path to config file that exists, or original path if none found
-    """
-    # If path is absolute or explicitly relative (starts with ./ or ../), use as is
-    if os.path.isabs(config_file) or config_file.startswith('./') or config_file.startswith('../'):
-        return config_file
         
-    # Check various locations in order of preference
-    possible_paths = [
-        config_file,  # Current directory
-        os.path.join('..', config_file),  # Parent directory (project root when run from src/)
-        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), config_file)  # Absolute path to project root
-    ]
+    Note:
+        This function is maintained for backward compatibility.
+        The actual path resolution is now handled by ConfigManager.
+    """
+    # Use the unified configuration manager for path resolution
+    config_manager = get_config_manager(config_file if config_file != 'config.json' else None)
     
-    for path in possible_paths:
-        if os.path.exists(path):
-            return path
-    
-    # Return original path if not found (will be handled by error logic later)
+    # The ConfigManager handles path resolution internally
+    # This function mainly exists for backward compatibility
     return config_file
 
 async def get_async_client(config_file: str = 'config.json') -> AsyncSalesforceModelsClient:
@@ -255,11 +250,14 @@ async def initialize_global_config():
     """
     try:
         # Check for config.json with robust path resolution
-        # First try in current directory, then parent directory, then absolute paths
+        # First try secure location, then fallback to legacy locations
         config_file_paths = [
-            'config.json',                           # Current directory
-            '../config.json',                        # Parent directory (project root when run from src/)
-            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config.json')  # Absolute path to project root
+            '.secure/config.json',                   # Secure directory in current location
+            '../.secure/config.json',                # Secure directory in parent (project root when run from src/)
+            'config.json',                           # Legacy: Current directory
+            '../config.json',                        # Legacy: Parent directory (project root when run from src/)
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.secure', 'config.json'),  # Absolute path to secure config
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config.json')  # Legacy: Absolute path to project root
         ]
         
         config_file = None
@@ -316,6 +314,7 @@ def map_model_name(model: str) -> str:
         str: Salesforce API model name
     """
     model_mapping = {
+        # Friendly names
         "claude-3-haiku": "sfdc_ai__DefaultBedrockAnthropicClaude3Haiku",
         "claude-3-sonnet": "sfdc_ai__DefaultBedrockAnthropicClaude37Sonnet", 
         "claude-4-sonnet": "sfdc_ai__DefaultBedrockAnthropicClaude4Sonnet",
@@ -323,7 +322,15 @@ def map_model_name(model: str) -> str:
         "gpt-4-mini": "sfdc_ai__DefaultOpenAIGPT4OmniMini",
         "gpt-4-turbo": "sfdc_ai__DefaultGPT4Omni",
         "gpt-3.5-turbo": "sfdc_ai__DefaultOpenAIGPT4OmniMini", # Map to mini for compatibility
-        "gemini-pro": "sfdc_ai__DefaultVertexAIGemini25Flash001"
+        "gemini-pro": "sfdc_ai__DefaultVertexAIGemini25Flash001",
+        
+        # Full Anthropic model names (with version dates)
+        "claude-3-haiku-20240307": "sfdc_ai__DefaultBedrockAnthropicClaude3Haiku",
+        "claude-3-sonnet-20240229": "sfdc_ai__DefaultBedrockAnthropicClaude37Sonnet",
+        "claude-3-opus-20240229": "sfdc_ai__DefaultBedrockAnthropicClaude4Sonnet",
+        "claude-3-5-sonnet-latest": "sfdc_ai__DefaultBedrockAnthropicClaude37Sonnet",
+        "claude-3-5-sonnet-20240620": "sfdc_ai__DefaultBedrockAnthropicClaude37Sonnet",
+        "claude-3-5-sonnet-20241022": "sfdc_ai__DefaultBedrockAnthropicClaude37Sonnet"
     }
     
     return model_mapping.get(model, model)
@@ -435,14 +442,31 @@ async def register_anthropic_router():
         # Always register the new Anthropic compatibility router at /anthropic
         try:
             from routers.anthropic_compat_async import create_anthropic_compat_router
-            compat_router = create_anthropic_compat_router()
-            app.register_blueprint(compat_router, url_prefix='/anthropic')
+            logger.info("🔧 Anthropic router import successful")
+            compat_router = create_anthropic_compat_router(url_prefix='')  # No prefix in router
+            logger.info("🔧 Anthropic router creation successful")
+            app.register_blueprint(compat_router, url_prefix='/anthropic/v1')  # Full prefix during registration
             logger.info("✅ Anthropic compatibility router registered at /anthropic")
+            
+            # Verify routes were registered
+            anthropic_routes = [rule for rule in app.url_map.iter_rules() if '/anthropic' in rule.rule]
+            logger.info(f"🔧 Registered {len(anthropic_routes)} Anthropic routes:")
+            for route in anthropic_routes:
+                logger.info(f"   - {route.rule} [{', '.join(route.methods)}]")
+                
         except ImportError as e:
             logger.error(f"❌ Failed to import Anthropic compatibility router: {e}")
+            import traceback
+            logger.error(f"❌ Import traceback: {traceback.format_exc()}")
+        except Exception as e:
+            logger.error(f"❌ Failed to register Anthropic compatibility router: {e}")
+            import traceback
+            logger.error(f"❌ Registration traceback: {traceback.format_exc()}")
             
     except Exception as e:
         logger.error(f"❌ Error registering Anthropic routers: {e}")
+        import traceback
+        logger.error(f"❌ Router registration traceback: {traceback.format_exc()}")
 
 @app.before_serving
 async def startup():
@@ -531,6 +555,133 @@ async def list_models():
         proxy_latency = (time.time() - request_start_time) * 1000
         return add_n8n_compatible_headers(json_response, proxy_latency_ms=proxy_latency), 500
 
+async def convert_openai_tool_response_to_anthropic(
+    openai_response: Dict[str, Any], 
+    model: str, 
+    original_messages: List[Dict[str, Any]],
+    original_tools: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """
+    Convert OpenAI tool calling response format to Anthropic tool_use blocks format.
+    
+    Args:
+        openai_response: OpenAI format response with tool_calls
+        model: Model name for the response
+        original_messages: Original message array for context
+        original_tools: Original Anthropic tool definitions
+        
+    Returns:
+        Dict: Anthropic-compatible response with tool_use blocks
+    """
+    logger.debug(f"🔧 Converting OpenAI tool response to Anthropic format")
+    
+    # Generate message ID
+    message_id = f"msg_{int(time.time())}{hash(str(openai_response)) % 1000}"
+    
+    # Extract usage information
+    usage = openai_response.get('usage', {})
+    input_tokens = usage.get('prompt_tokens', 0)
+    output_tokens = usage.get('completion_tokens', 0)
+    
+    # Check if this is a tool calling response
+    choices = openai_response.get('choices', [])
+    if not choices:
+        # No choices - return error
+        return {
+            "id": message_id,
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Error: No response choices available"
+                }
+            ],
+            "model": model,
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens
+            }
+        }
+    
+    choice = choices[0]
+    message = choice.get('message', {})
+    tool_calls = message.get('tool_calls', [])
+    content = message.get('content', '')
+    finish_reason = choice.get('finish_reason', 'stop')
+    
+    # Build content blocks
+    content_blocks = []
+    
+    # Add text content if present
+    if content and content.strip():
+        content_blocks.append({
+            "type": "text",
+            "text": content
+        })
+    
+    # Convert tool_calls to tool_use blocks
+    if tool_calls:
+        logger.info(f"🔧 Converting {len(tool_calls)} tool calls to Anthropic tool_use blocks")
+        
+        for tool_call in tool_calls:
+            if tool_call.get('type') == 'function':
+                function = tool_call.get('function', {})
+                function_name = function.get('name', '')
+                function_args_str = function.get('arguments', '{}')
+                
+                # Parse arguments JSON
+                try:
+                    function_args = json.loads(function_args_str)
+                except json.JSONDecodeError:
+                    logger.error(f"❌ Failed to parse tool arguments: {function_args_str}")
+                    function_args = {}
+                
+                # Create tool_use block in Anthropic format with proper ID
+                original_id = tool_call.get('id', f"call_{int(time.time())}")
+                # Convert call_ prefix to toolu_ for Anthropic compatibility
+                if original_id.startswith('call_'):
+                    anthropic_tool_id = original_id.replace('call_', 'toolu_', 1)
+                else:
+                    anthropic_tool_id = f"toolu_{original_id}"
+                
+                tool_use_block = {
+                    "type": "tool_use",
+                    "id": anthropic_tool_id,
+                    "name": function_name,
+                    "input": function_args
+                }
+                
+                content_blocks.append(tool_use_block)
+                logger.debug(f"✅ Converted tool call: {function_name}")
+    
+    # Determine stop reason
+    anthropic_stop_reason = "end_turn"
+    if finish_reason == "tool_calls":
+        anthropic_stop_reason = "tool_use"
+    elif finish_reason == "length":
+        anthropic_stop_reason = "max_tokens"
+    
+    # Build final Anthropic response
+    anthropic_response = {
+        "id": message_id,
+        "type": "message",
+        "role": "assistant",
+        "content": content_blocks,
+        "model": model,
+        "stop_reason": anthropic_stop_reason,
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens
+        }
+    }
+    
+    logger.info(f"✅ Converted to Anthropic format: {len(content_blocks)} content blocks, stop_reason={anthropic_stop_reason}")
+    return anthropic_response
+
 @app.route('/v1/messages', methods=['POST'])
 @async_with_token_refresh
 async def anthropic_messages():
@@ -573,68 +724,183 @@ async def anthropic_messages():
                 proxy_latency = (time.time() - request_start_time) * 1000
                 return add_n8n_compatible_headers(json_response, proxy_latency_ms=proxy_latency), status_code
         
-        # Convert Anthropic messages format to internal format
+        # CRITICAL FIX: Convert Anthropic messages format to internal OpenAI format
         openai_messages = []
         
         # Add system message if present
         if system_message:
             openai_messages.append({"role": "system", "content": system_message})
         
-        # Convert messages
+        # Convert messages with enhanced Anthropic content block support
         for msg in messages:
             role = msg.get('role')
             content = msg.get('content')
             
             if isinstance(content, list):
-                # Handle content blocks (Anthropic format)
+                # Handle content blocks (Anthropic format) - CRITICAL FIX for tool_result
                 text_content = ""
+                tool_calls = []
+                
                 for block in content:
-                    if block.get('type') == 'text':
+                    block_type = block.get('type')
+                    
+                    if block_type == 'text':
                         text_content += block.get('text', '')
-                content = text_content
+                    
+                    elif block_type == 'tool_use':
+                        # Convert Anthropic tool_use to OpenAI tool_calls format
+                        tool_id = block.get('id', f"call_{int(time.time())}")
+                        # Convert toolu_ prefix to call_ for internal OpenAI compatibility
+                        if tool_id.startswith('toolu_'):
+                            tool_id = tool_id.replace('toolu_', 'call_', 1)
+                        elif not tool_id.startswith('call_'):
+                            tool_id = f"call_{tool_id}"
+                        
+                        tool_call = {
+                            "id": tool_id,
+                            "type": "function",
+                            "function": {
+                                "name": block.get('name', ''),
+                                "arguments": json.dumps(block.get('input', {}))
+                            }
+                        }
+                        tool_calls.append(tool_call)
+                        logger.debug(f"🔧 Converted Anthropic tool_use to OpenAI format: {block.get('name')}")
+                    
+                    elif block_type == 'tool_result':
+                        # CRITICAL FIX: Handle tool_result content blocks
+                        tool_use_id = block.get('tool_use_id', '')
+                        result_content = block.get('content', '')
+                        
+                        # Convert tool_result to OpenAI tool message format
+                        if tool_use_id and result_content:
+                            # Convert toolu_ prefix back to call_ for internal OpenAI compatibility
+                            openai_tool_id = tool_use_id
+                            if tool_use_id.startswith('toolu_'):
+                                openai_tool_id = tool_use_id.replace('toolu_', 'call_', 1)
+                            elif not tool_use_id.startswith('call_'):
+                                openai_tool_id = f"call_{tool_use_id}"
+                            
+                            # Create a separate tool message
+                            tool_message = {
+                                "role": "tool",
+                                "tool_call_id": openai_tool_id,
+                                "content": str(result_content)
+                            }
+                            openai_messages.append(tool_message)
+                            logger.debug(f"🔧 Converted Anthropic tool_result to OpenAI tool message: {tool_use_id} -> {openai_tool_id}")
+                        
+                        # Also append to text content for context
+                        text_content += f"\n[Tool Result: {result_content}]"
+                
+                # Build the converted message
+                if role == 'assistant' and tool_calls:
+                    # Assistant message with tool calls
+                    openai_msg = {
+                        "role": "assistant", 
+                        "content": text_content or "",
+                        "tool_calls": tool_calls
+                    }
+                    openai_messages.append(openai_msg)
+                    logger.debug(f"🔧 Created assistant message with {len(tool_calls)} tool calls")
+                elif text_content.strip():
+                    # Regular message with text content
+                    openai_messages.append({"role": role, "content": text_content})
+                # Skip empty messages
+                
+            else:
+                # Handle string content normally
+                if content and str(content).strip():
+                    openai_messages.append({"role": role, "content": str(content)})
+        
+        logger.info(f"Processing Anthropic-style request - Model: {model}, Tools: {len(tools) if tools else 0}")
+        
+        # CRITICAL FIX: Check if tools are present and integrate tool calling handler
+        if tools and tool_calling_handler:
+            logger.info(f"🔧 ANTHROPIC TOOL CALLING: Converting {len(tools)} Anthropic tools to OpenAI format")
             
-            openai_messages.append({"role": role, "content": content})
-        
-        # Map model name to Salesforce format
-        sf_model = map_model_name(model)
-        logger.info(f"Processing Anthropic-style request - Model: {sf_model}")
-        
-        # Convert messages for Salesforce processing
-        system_msg = None
-        user_messages = []
-        
-        for msg in openai_messages:
-            if msg.get('role') == 'system':
-                system_msg = msg.get('content', '')
-            elif msg.get('role') == 'user':
-                user_messages.append(msg.get('content', ''))
-            elif msg.get('role') == 'assistant':
-                user_messages.append(f"Assistant: {msg.get('content', '')}")
-        
-        if len(user_messages) == 0:
-            error_response = formatter.format_error_response(
-                error="No user messages found",
-                error_type="invalid_request",
-                model=model
+            # Convert Anthropic tools to OpenAI format for internal processing
+            openai_tools = convert_anthropic_to_openai_tools(tools)
+            logger.debug(f"✅ Converted to {len(openai_tools)} OpenAI format tools")
+            
+            # Validate converted tools
+            try:
+                validate_tool_definitions(openai_tools)
+                logger.debug(f"✅ Validated converted OpenAI tools")
+            except ToolCallingValidationError as e:
+                error_response, status_code = create_tool_validation_error_response([str(e)])
+                json_response = jsonify(error_response)
+                proxy_latency = (time.time() - request_start_time) * 1000
+                return add_n8n_compatible_headers(json_response, proxy_latency_ms=proxy_latency), status_code
+            
+            # Process with tool calling using the same logic as OpenAI endpoint
+            tool_response = await async_process_tool_request(
+                client=client,
+                messages=openai_messages,
+                tools=openai_tools,
+                tool_choice=tool_choice,
+                model=model,  # Use original model name
+                max_tokens=max_tokens,
+                temperature=temperature
             )
-            json_response = jsonify(error_response)
-            proxy_latency = (time.time() - request_start_time) * 1000
-            return add_n8n_compatible_headers(json_response, proxy_latency_ms=proxy_latency), 400
+            
+            # Convert OpenAI tool response to Anthropic format
+            anthropic_response = await convert_openai_tool_response_to_anthropic(
+                tool_response, model, openai_messages, tools
+            )
+            
+            if stream:
+                # For tool calling responses, streaming is complex - return non-stream for now
+                logger.info(f"🔧 Tool calling response - returning non-stream format")
+                await track_request_performance(request_start_time)
+                json_response = jsonify(anthropic_response)
+                return add_n8n_compatible_headers(json_response)
+            else:
+                await track_request_performance(request_start_time)
+                json_response = jsonify(anthropic_response)
+                return add_n8n_compatible_headers(json_response)
         
-        final_prompt = user_messages[-1]
-        
-        if len(user_messages) > 1 and not system_msg:
-            conversation_history = "\n".join(user_messages[:-1])
-            system_msg = f"Previous conversation:\n{conversation_history}\n\nPlease respond to the following:"
-        
-        # Generate response
-        sf_response = await async_with_token_refresh(client._async_generate_text)(
-            prompt=final_prompt,
-            model=sf_model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            system_message=system_msg
-        )
+        else:
+            # No tools - use standard text generation (original logic)
+            # Map model name to Salesforce format
+            sf_model = map_model_name(model)
+            
+            # Convert messages for Salesforce processing
+            system_msg = None
+            user_messages = []
+            
+            for msg in openai_messages:
+                if msg.get('role') == 'system':
+                    system_msg = msg.get('content', '')
+                elif msg.get('role') == 'user':
+                    user_messages.append(msg.get('content', ''))
+                elif msg.get('role') == 'assistant':
+                    user_messages.append(f"Assistant: {msg.get('content', '')}")
+            
+            if len(user_messages) == 0:
+                error_response = formatter.format_error_response(
+                    error="No user messages found",
+                    error_type="invalid_request",
+                    model=model
+                )
+                json_response = jsonify(error_response)
+                proxy_latency = (time.time() - request_start_time) * 1000
+                return add_n8n_compatible_headers(json_response, proxy_latency_ms=proxy_latency), 400
+            
+            final_prompt = user_messages[-1]
+            
+            if len(user_messages) > 1 and not system_msg:
+                conversation_history = "\n".join(user_messages[:-1])
+                system_msg = f"Previous conversation:\n{conversation_history}\n\nPlease respond to the following:"
+            
+            # Generate response
+            sf_response = await async_with_token_refresh(client._async_generate_text)(
+                prompt=final_prompt,
+                model=sf_model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                system_message=system_msg
+            )
         
         if stream:
             # For streaming, we still need the extracted text and usage for the streaming function

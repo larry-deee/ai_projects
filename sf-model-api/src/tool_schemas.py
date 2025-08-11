@@ -1119,23 +1119,32 @@ def parse_tool_calls_from_response(response_text: str) -> List[Dict[str, Any]]:
         
         try:
             parsed_calls = json.loads(processed_content)
+            # CRITICAL FIX: Handle both array format [{...}] and single object format {...}
             if isinstance(parsed_calls, list):
-                for i, call in enumerate(parsed_calls):
-                    if isinstance(call, dict) and 'name' in call:
-                        try:
-                            # CRITICAL: Convert to OpenAI-compliant format
-                            compliant_call = _create_openai_compliant_tool_call(call)
-                            tool_calls.append(compliant_call)
-                            logger.debug(f"Created OpenAI-compliant tool call: {compliant_call['id']}")
-                        except ValueError as validation_error:
-                            logger.warning(f"Skipping invalid tool call at index {i}: {validation_error}")
-                            continue
-                    else:
-                        logger.warning(f"Invalid tool call format at index {i}: missing 'name' field")
-                        continue
+                # Standard array format: [{...}, {...}]
+                calls_to_process = parsed_calls
+            elif isinstance(parsed_calls, dict) and 'name' in parsed_calls:
+                # Single object format: {...} - wrap in array for processing
+                calls_to_process = [parsed_calls]
+                logger.info(f"🔧 Converting single object XML function call to array format for n8n compatibility")
             else:
-                logger.error(f"Parsed tool calls is not an array: {type(parsed_calls)}")
+                logger.error(f"Parsed tool calls is not a valid format: {type(parsed_calls)}. Expected array or object with 'name' field.")
                 return []
+            
+            # Process the calls (now guaranteed to be a list)
+            for i, call in enumerate(calls_to_process):
+                if isinstance(call, dict) and 'name' in call:
+                    try:
+                        # CRITICAL: Convert to OpenAI-compliant format
+                        compliant_call = _create_openai_compliant_tool_call(call)
+                        tool_calls.append(compliant_call)
+                        logger.debug(f"Created OpenAI-compliant tool call: {compliant_call['id']}")
+                    except ValueError as validation_error:
+                        logger.warning(f"Skipping invalid tool call at index {i}: {validation_error}")
+                        continue
+                else:
+                    logger.warning(f"Invalid tool call format at index {i}: missing 'name' field")
+                    continue
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse tool calls JSON: {e}")
             
