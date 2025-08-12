@@ -1,4 +1,6 @@
 {
+    "_comment": "Configuration precedence: 1) Environment Variables, 2) .env file, 3) This .secure/config.json file, 4) Defaults",
+    "_usage": "Copy to .secure/config.json and edit with your credentials",
     "consumer_key": "YOUR_SALESFORCE_CONSUMER_KEY",
     "consumer_secret": "YOUR_SALESFORCE_CONSUMER_SECRET", 
     "username": "your-username@salesforce.com",

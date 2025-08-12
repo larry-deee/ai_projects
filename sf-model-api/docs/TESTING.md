@@ -27,16 +27,20 @@ python llm_endpoint_server.py
 
 ### Python Unit Tests
 
-Run the comprehensive test suite:
+**Note:** The `/tests/` directory is available for local development but excluded from the git repository.
 
+### For Developers (Local Testing):
 ```bash
-# Run all tests
+# Run comprehensive test suite (requires local tests/ directory)
 python -m pytest tests/ -v
+```
 
-# Test specific functionality
-python test_llm_endpoint.py
-python test_tool_calling.py
-python test_streaming_architecture.py
+### For Users (Quick Verification):
+```bash
+# Basic functionality test with curl
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "claude-3-haiku", "messages": [{"role": "user", "content": "Hello"}]}'
 
 # Performance tests
 python test_caching_performance.py

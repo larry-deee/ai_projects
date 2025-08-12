@@ -13,6 +13,38 @@ ASYNC_REQUIREMENTS_FILE="async_requirements.txt"
 SERVICE_NAME="salesforce-llm-gateway-async"
 ENVIRONMENT=${ENVIRONMENT:-development}
 
+# Load environment variables from .env file if it exists
+# Check for .env file in project root (one level up from scripts/)
+ENV_FILE="../.env"
+if [ -f "$ENV_FILE" ]; then
+    echo "📄 Loading environment variables from $ENV_FILE..."
+    # Parse .env file with proper handling of inline comments
+    while IFS='=' read -r key value || [ -n "$key" ]; do
+        # Skip comment lines and empty lines
+        [[ "$key" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "$key" ]] && continue
+        
+        # Remove inline comments and whitespace
+        value=$(echo "$value" | sed 's/[[:space:]]*#.*//')
+        
+        # Export the variable if key is valid
+        if [[ "$key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+            export "$key"="$value"
+        fi
+    done < "$ENV_FILE"
+elif [ -f .env ]; then
+    echo "📄 Loading environment variables from .env..."
+    # Fallback: check current directory with same parsing
+    while IFS='=' read -r key value || [ -n "$key" ]; do
+        [[ "$key" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "$key" ]] && continue
+        value=$(echo "$value" | sed 's/[[:space:]]*#.*//')
+        if [[ "$key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+            export "$key"="$value"
+        fi
+    done < .env
+fi
+
 # Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -86,8 +118,8 @@ setup_virtualenv() {
 validate_config() {
     echo "🔐 Validating configuration..."
     
-    # Check configuration exists
-    if [ ! -f "config.json" ] && [ -z "$SALESFORCE_CONSUMER_KEY" ]; then
+    # Check configuration exists (prioritize secure location)
+    if [ ! -f ".secure/config.json" ] && [ ! -f "config.json" ] && [ -z "$SALESFORCE_CONSUMER_KEY" ]; then
         log_error "Configuration not found!"
         echo ""
         echo "Please either:"
@@ -108,8 +140,10 @@ import asyncio
 sys.path.insert(0, './src')
 try:
     from salesforce_models_client import AsyncSalesforceModelsClient
+    import os
     async def test_config():
-        client = AsyncSalesforceModelsClient(config_file='config.json')
+        config_file = '.secure/config.json' if os.path.exists('.secure/config.json') else 'config.json'
+        client = AsyncSalesforceModelsClient(config_file=config_file)
         await client._async_validate_config()
         print('✅ Async configuration validated successfully')
         
@@ -216,7 +250,7 @@ start_service() {
         echo "   • n8n compatibility: $([ "$N8N_COMPAT_MODE" = "1" ] && echo "✅ ENABLED" || echo "❌ DISABLED")"
         echo "   • n8n tool preservation: $([ "$N8N_COMPAT_PRESERVE_TOOLS" = "1" ] && echo "✅ ENABLED" || echo "❌ DISABLED")"
         echo "   • OpenAI-native passthrough: $([ "$OPENAI_NATIVE_TOOL_PASSTHROUGH" = "1" ] && echo "✅ ENABLED" || echo "❌ DISABLED")"
-        echo "   • Verbose tool logs: $([ "$VERBOSE_TOOL_LOGS" = "1" ] && echo "✅ ENABLED" || echo "❌ DISABLED")"
+        echo "   • Verbose tool logs: $([ "$VERBOSE_TOOL_LOGS" = "1" ] || [ "$VERBOSE_TOOL_LOGS" = "true" ] && echo "✅ ENABLED" || echo "❌ DISABLED")"
         echo "   • Response debug: $([ "$SF_RESPONSE_DEBUG" = "true" ] && echo "✅ ENABLED" || echo "❌ DISABLED")"
         echo ""
         echo "🤖 Anthropic compatibility:"
@@ -317,7 +351,7 @@ main() {
             echo "    ENVIRONMENT=development|production"
             echo "    SF_RESPONSE_DEBUG=true|false        - Enable detailed response logging"
             echo "    N8N_COMPAT_MODE=1|0                 - Enable n8n/openai-js compatibility (default: 1)"
-            echo "    VERBOSE_TOOL_LOGS=1|0               - Enable detailed tool calling logs (default: 0)"
+            echo "    VERBOSE_TOOL_LOGS=true|false|1|0    - Enable detailed tool calling logs (default: false)"
             echo "    N8N_COMPAT_PRESERVE_TOOLS=1|0       - Preserve tools for n8n clients (default: 1)"
             echo "    OPENAI_NATIVE_TOOL_PASSTHROUGH=1|0  - Enable OpenAI-native model passthrough (default: 1)"
             echo ""

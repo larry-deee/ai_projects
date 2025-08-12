@@ -12,6 +12,30 @@ REQUIREMENTS_FILE="requirements.txt"
 SERVICE_NAME="salesforce-llm-gateway"
 ENVIRONMENT=${ENVIRONMENT:-development}
 
+# Load environment variables from .env file if it exists
+ENV_FILE="../.env"
+if [ -f "$ENV_FILE" ]; then
+    echo "📄 Loading environment variables from $ENV_FILE..."
+    while IFS='=' read -r key value || [ -n "$key" ]; do
+        [[ "$key" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "$key" ]] && continue
+        value=$(echo "$value" | sed 's/[[:space:]]*#.*//')
+        if [[ "$key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+            export "$key"="$value"
+        fi
+    done < "$ENV_FILE"
+elif [ -f .env ]; then
+    echo "📄 Loading environment variables from .env..."
+    while IFS='=' read -r key value || [ -n "$key" ]; do
+        [[ "$key" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "$key" ]] && continue
+        value=$(echo "$value" | sed 's/[[:space:]]*#.*//')
+        if [[ "$key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+            export "$key"="$value"
+        fi
+    done < .env
+fi
+
 # Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -79,8 +103,8 @@ setup_virtualenv() {
 validate_config() {
     echo "🔐 Validating configuration..."
     
-    # Check configuration exists
-    if [ ! -f "config.json" ] && [ -z "$SALESFORCE_CONSUMER_KEY" ]; then
+    # Check configuration exists (prioritize secure location)
+    if [ ! -f ".secure/config.json" ] && [ ! -f "config.json" ] && [ -z "$SALESFORCE_CONSUMER_KEY" ]; then
         log_error "Configuration not found!"
         echo ""
         echo "Please either:"
@@ -100,7 +124,9 @@ import sys
 sys.path.insert(0, './src')
 try:
     from salesforce_models_client import SalesforceModelsClient
-    client = SalesforceModelsClient(config_file='config.json')
+    import os
+    config_file = '.secure/config.json' if os.path.exists('.secure/config.json') else 'config.json'
+    client = SalesforceModelsClient(config_file=config_file)
     client._validate_config()
     print('✅ Configuration validated successfully')
 except Exception as e:

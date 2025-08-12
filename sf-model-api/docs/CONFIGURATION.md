@@ -13,9 +13,10 @@ This document provides comprehensive guidance on configuring the Salesforce Mode
 - **Security-Focused**: No hardcoded credentials
 
 ### Configuration Priority (Highest to Lowest)
-1. Environment Variables
-2. `config.json`
-3. Hardcoded Default Values
+1. **Environment Variables** (Runtime exports, CI/CD)
+2. **`.env` File** (Local development, automatically loaded)
+3. **`.secure/config.json` File** (Alternative configuration method)
+4. **Hardcoded Default Values** (Fallback values)
 
 ## Configuration Sources
 
@@ -44,7 +45,38 @@ Environment variables provide the most flexible and secure way to configure the 
 - `MAX_WORKER_MEMORY`: Memory limit per worker in MB (default: 512)
 - `VERBOSE_TOOL_LOGS`: Enable detailed tool execution logging (default: false)
 
-### 2. Configuration File (`config.json`)
+#### Compatibility Configuration
+- `N8N_COMPAT_MODE`: Enable specific compatibility for n8n workflows (default: false)
+  - When true, enables n8n-specific tool calling and parameter parsing behaviors
+- `OPENAI_NATIVE_TOOL_PASSTHROUGH`: Allow direct passthrough of OpenAI-style tool calls (default: true)
+  - When enabled, allows seamless compatibility with OpenAI function calling schema
+- `ANTHROPIC_TOOL_COMPATIBILITY`: Enable Anthropic-specific tool calling behaviors (default: true)
+
+### 2. .env File Configuration
+
+The `.env` file provides a convenient way to manage environment variables during development. The start scripts automatically load `.env` files.
+
+#### Setting up .env Configuration
+```bash
+# Copy the template
+cp .env.example .env
+
+# Edit .env with your configuration
+# Variables in .env are automatically loaded by start scripts
+```
+
+#### .env File Benefits
+- **Development-Friendly**: Easy to manage local configurations
+- **Automatic Loading**: Start scripts automatically source .env files
+- **Version Control Safe**: .env files are gitignored by default
+- **Environment Isolation**: Different .env files for different environments
+
+#### .env vs Environment Variables
+- **`.env` File**: Best for local development and testing
+- **Environment Variables**: Best for production, CI/CD, and Docker deployments
+- **Precedence**: Direct environment variables override .env file values
+
+### 3. Configuration File (`.secure/config.json`)
 The `config.json` file provides a persistent configuration mechanism with environment variable overrides.
 
 #### Example Configuration
@@ -102,6 +134,71 @@ async def example():
     # Async configuration retrieval
     config = await get_config_async()
     salesforce_config = await get_salesforce_config_async()
+```
+
+## 🤔 Configuration Method Decision Guide
+
+### When to Use Environment Variables
+**✅ Recommended for:**
+- Production deployments
+- CI/CD pipelines
+- Docker containers
+- Kubernetes deployments
+- Cloud platforms (AWS, GCP, Azure)
+- When you need to override config.json values
+
+**Example Use Cases:**
+- Production servers with different credentials per environment
+- CI/CD systems where secrets are injected at runtime
+- Container orchestration where config is managed externally
+
+### When to Use .env Files
+**✅ Recommended for:**
+- Local development
+- Quick setup and testing
+- Development team collaboration
+- When you want automatic loading without manual exports
+
+**Example Use Cases:**
+- Developer workstations
+- Local testing environments
+- Development teams sharing common configuration templates
+
+### When to Use .secure/config.json
+**✅ Recommended for:**
+- Complex nested configurations
+- When you prefer file-based configuration
+- Legacy compatibility
+- When you need detailed configuration comments
+
+**Example Use Cases:**
+- Applications requiring complex structured configuration
+- Teams preferring JSON configuration format
+- Migration from other config systems
+
+### ⚡ Quick Decision Matrix
+
+| Scenario | Recommended Method | Reason |
+|----------|-------------------|--------|
+| **Local Development** | `.env` file | Easy setup, automatic loading |
+| **Production Deployment** | Environment Variables | Security, container-friendly |
+| **CI/CD Pipeline** | Environment Variables | Integration with secret management |
+| **Docker Container** | Environment Variables | Standard container practice |
+| **Complex Config Structure** | `.secure/config.json` | Supports nested configuration |
+| **Quick Testing** | `.env` file | Fastest setup |
+
+### 🔄 Migration Between Methods
+
+**From .env to Environment Variables:**
+```bash
+# Export all variables from .env
+export $(cat .env | xargs)
+```
+
+**From config.json to .env:**
+```bash
+# Convert JSON values to .env format (manual process)
+# Copy values from .secure/config.json to .env.example format
 ```
 
 ## Security Best Practices

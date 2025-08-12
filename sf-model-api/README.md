@@ -41,26 +41,90 @@ cd models-api
 pip install -r requirements.txt
 ```
 
-2. Configure authentication:
+2. **Configure authentication** (Choose ONE method):
+
+## 🔧 Configuration Methods & Precedence
+
+**Configuration is loaded in this order (highest priority first):**
+1. **Environment Variables** (Highest Priority)
+2. **`.env` file** (Medium Priority) 
+3. **`.secure/config.json` file** (Lowest Priority)
+
+### **Method 1: Environment Variables (Recommended for Production)**
 ```bash
-# Create secure config directory
+# Set directly in your environment
+export SALESFORCE_CONSUMER_KEY="your_key"
+export SALESFORCE_CONSUMER_SECRET="your_secret"
+export SALESFORCE_USERNAME="user@company.com"
+export SALESFORCE_INSTANCE_URL="https://your-instance.my.salesforce.com"
+```
+
+### **Method 2: .env File (Recommended for Development)**
+```bash
+# Copy template and customize
+cp .env.example .env
+# Edit .env with your credentials
+# No need to source - automatically loaded by start scripts
+```
+
+### **Method 3: JSON Config File (Alternative)**
+```bash
+# Create secure config directory and file
 mkdir -p .secure
 cp config.json.example .secure/config.json
-
-# Set environment variables
-export SALESFORCE_CONSUMER_KEY="your_key"
-export SALESFORCE_USERNAME="user@company.com"
-export SALESFORCE_PRIVATE_KEY_FILE="/path/to/server.key"
+# Edit .secure/config.json with your credentials
 ```
+
+**💡 Pro Tip:** Use `.env` for development and environment variables for production deployment.
 
 3. Start the server:
-```bash
-# Local Development (Recommended)
-uvicorn src.async_endpoint_server:app --host 127.0.0.1 --port 8000
 
-# Production
-gunicorn -c gunicorn_config.py llm_endpoint_server:app
+```bash
+# Recommended: High-performance async server (production-ready)
+./scripts/start_async_service.sh
+
+# Alternative: Standard server  
+./scripts/start_llm_service.sh
+
+# Development mode with specific environment
+ENVIRONMENT=development ./scripts/start_async_service.sh
+
+# Production deployment
+ENVIRONMENT=production ./scripts/start_async_service.sh
+
+# View comprehensive help and all environment variables
+./scripts/start_async_service.sh --help
+
+# Manual start options (if needed)
+uvicorn src.async_endpoint_server:app --host 127.0.0.1 --port 8000
 ```
+
+**Key Environment Variables:**
+
+**🔧 Server Configuration:**
+- `HOST`: Server bind address (default: 0.0.0.0)
+- `PORT`: Server port (default: 8000)  
+- `WORKERS`: Number of gunicorn workers (default: 4)
+- `ENVIRONMENT`: 'development' or 'production' (default: development)
+
+**🔐 Authentication (Required):**
+- `SALESFORCE_CONSUMER_KEY`: Your Salesforce Connected App key
+- `SALESFORCE_CONSUMER_SECRET`: Your Salesforce Connected App secret
+- `SALESFORCE_USERNAME`: Your Salesforce username
+- `SALESFORCE_INSTANCE_URL`: Your Salesforce instance URL
+
+**⚙️ Compatibility & Features:**
+- `N8N_COMPAT_MODE`: Enable n8n/OpenAI.js compatibility (default: 1)
+- `OPENAI_NATIVE_TOOL_PASSTHROUGH`: Enable OpenAI native tool passthrough (default: 1)
+- `VERBOSE_TOOL_LOGS`: Enable detailed tool calling logs (default: 0)
+- `SF_RESPONSE_DEBUG`: Enable detailed response logging (default: false)
+
+**🎯 Performance & Optimization:**
+- `N8N_COMPAT_PRESERVE_TOOLS`: Preserve tools for n8n clients (default: 1)
+- `NATIVE_ANTHROPIC_ENABLED`: Enable legacy Anthropic router (default: false)
+- `OPENAI_FRONTDOOR_ENABLED`: Enable OpenAI front-door architecture (default: 0)
+
+*See `.env.example` for a complete configuration template with all options.*
 
 ## 📚 Documentation
 
